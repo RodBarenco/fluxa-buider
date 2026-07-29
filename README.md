@@ -104,6 +104,18 @@ fluxa-builder verify application.flxpkg --public-key /trusted/signing.pub
 The detached signature defaults to `application.flxpkg.sig`; use
 `--signature <path>` to select another file.
 
+For runtimes that implement the embedded footer contract, a single-file build
+can be requested explicitly:
+
+```sh
+fluxa-builder build . --embed
+```
+
+The Builder appends the verified FLXPKG and a versioned footer to the runtime,
+reopens and verifies the final executable, then runs the same non-interactive
+self-test before publication. Until a future signed-footer format exists,
+`--embed` and `--sign-key` are intentionally mutually exclusive.
+
 Verified runtime binaries are managed locally:
 
 ```sh

@@ -18,6 +18,7 @@ import (
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/embedded"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
@@ -204,6 +205,11 @@ terminal = false
 			return nil
 		},
 		archivePortable: portable.Archive,
+		buildEmbedded:   embedded.Build,
+		smokeExecutable: func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error) {
+			return portable.SmokeReport{}, nil
+		},
+		getenv: func(string) string { return "" },
 	}
 	code := runBuild([]string{
 		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--sign-key", privateKeyPath,
@@ -283,6 +289,62 @@ terminal = false
 	if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
 		t.Fatal(err)
 	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--embed", "--sign-key", privateKeyPath,
+	}, &stdout, &stderr, dependencies)
+	if code != 1 || !strings.Contains(stderr.String(), "cannot yet be combined") {
+		t.Fatalf("signed embedded build code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "dist")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("signed embedded rejection published dist: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--embed",
+	}, &stdout, &stderr, dependencies)
+	if code != 0 {
+		t.Fatalf("embedded build code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Embedded executable verified") {
+		t.Fatalf("embedded build stdout=%q", stdout.String())
+	}
+	embeddedPath := filepath.Join(root, "dist", targetDirectoryName(targetOS, runtime.GOARCH), "cli-test")
+	if targetOS == "windows" {
+		embeddedPath += ".exe"
+	}
+	if _, err := embedded.Verify(embeddedPath); err != nil {
+		t.Fatalf("published embedded executable invalid: %v", err)
+	}
+	targetEntries, err := os.ReadDir(filepath.Dir(embeddedPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targetEntries) != 1 {
+		t.Fatalf("embedded output contains %d entries, want one", len(targetEntries))
+	}
+
+	if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
+		t.Fatal(err)
+	}
+	dependencies.smokeExecutable = func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error) {
+		return portable.SmokeReport{}, errors.New("embedded runtime rejected package")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--embed",
+	}, &stdout, &stderr, dependencies)
+	if code != 1 || !strings.Contains(stderr.String(), "embedded executable smoke test failed") {
+		t.Fatalf("failed embedded smoke code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "dist")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed embedded smoke published dist: %v", err)
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	dependencies.smokePortable = func(context.Context, portable.Result, time.Duration) error {
@@ -440,6 +502,11 @@ func TestParseBuildOptions(t *testing.T) {
 			name: "sign key",
 			args: []string{"my project", "--sign-key", "/secure/signing.key"},
 			want: buildOptions{projectPath: "my project", signKeyPath: "/secure/signing.key"},
+		},
+		{
+			name: "embedded executable",
+			args: []string{"my project", "--embed"},
+			want: buildOptions{projectPath: "my project", embed: true},
 		},
 		{
 			name:      "missing flag value",

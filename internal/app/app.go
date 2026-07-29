@@ -15,6 +15,7 @@ import (
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/embedded"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
@@ -82,7 +83,7 @@ func printUsage(w io.Writer) error {
 
 Usage:
   fluxa-builder build [project] [--fluxa <path>] [--runtime-registry <path>]
-                        [--sign-key <path>] [--include-source] [--keep-work]
+                        [--sign-key <path>] [--embed] [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
   fluxa-builder verify <file.flxpkg> [--signature <file.sig> --public-key <signing.pub>]
   fluxa-builder runtime list [--registry <path>]
@@ -104,6 +105,7 @@ type buildOptions struct {
 	includeSource   bool
 	runtimeRegistry string
 	signKeyPath     string
+	embed           bool
 }
 
 type buildDependencies struct {
@@ -120,6 +122,9 @@ type buildDependencies struct {
 	buildPortable   func(context.Context, portable.Request) (portable.Result, error)
 	smokePortable   func(context.Context, portable.Result, time.Duration) error
 	archivePortable func(context.Context, portable.Result, string) (portable.ArchiveResult, error)
+	buildEmbedded   func(context.Context, embedded.Request) (embedded.Info, error)
+	smokeExecutable func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
+	getenv          func(string) string
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -137,6 +142,9 @@ func defaultBuildDependencies() buildDependencies {
 		buildPortable:   portable.Build,
 		smokePortable:   portable.Smoke,
 		archivePortable: portable.Archive,
+		buildEmbedded:   embedded.Build,
+		smokeExecutable: portable.SmokeExecutable,
+		getenv:          os.Getenv,
 	}
 }
 
@@ -242,7 +250,12 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to write Fluxa package\ncaused by: %v\n", err)
 		return 1
 	}
-	signKeyPath := resolveSignKeyPath(options.signKeyPath, os.Getenv)
+	signKeyPath := resolveSignKeyPath(options.signKeyPath, dependencies.getenv)
+	if options.embed && signKeyPath != "" {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: --embed cannot yet be combined with package signing; no artifact was published\n")
+		return 1
+	}
 	var signatureResult signing.Result
 	if signKeyPath != "" {
 		signatureResult, err = dependencies.signPackage(packageResult.Path, signKeyPath, packageResult.Path+".sig")
@@ -282,55 +295,99 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to create target staging directory\ncaused by: %v\n", err)
 		return 1
 	}
-	portableResult, err := dependencies.buildPortable(context.Background(), portable.Request{
-		OutputRoot:    targetStage,
-		ProjectName:   cfg.Project.Name,
-		ProjectID:     cfg.Project.ID,
-		Version:       cfg.Project.Version,
-		TargetOS:      packageManifest.Target.OS,
-		TargetArch:    packageManifest.Target.Arch,
-		Terminal:      packageManifest.Target.Terminal,
-		PackagePath:   packageResult.Path,
-		PackageSHA256: packageResult.SHA256,
-		Runtime:       selectedRuntime,
-		SourceExposed: packageManifest.Build.SourceExposed,
-		SignaturePath: signatureResult.Path,
-		SignatureHash: signatureResult.SHA256,
-		SigningKeyID:  signatureResult.KeyID,
-	})
-	if err != nil {
-		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(stderr, "error: failed to assemble portable application\ncaused by: %v\n", err)
-		return 1
-	}
-	if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
-		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(
-			stderr,
-			"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
-			packageManifest.Target.OS,
-			packageManifest.Target.Arch,
-		)
-		return 1
-	}
-	if err := dependencies.smokePortable(context.Background(), portableResult, 10*time.Second); err != nil {
-		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(stderr, "error: portable application smoke test failed\ncaused by: %v\n", err)
-		return 1
-	}
-	archiveResult, err := dependencies.archivePortable(context.Background(), portableResult, packageManifest.Target.OS)
-	if err != nil {
-		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(stderr, "error: failed to create distribution archive\ncaused by: %v\n", err)
-		return 1
-	}
 	publishTarget := filepath.Join(cfg.OutputPath, targetName)
-	if err := workspace.Publish(context.Background(), targetStage, publishTarget); err != nil {
-		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application and archive\ncaused by: %v\n", err)
-		return 1
+	publishDestination := ""
+	var portableResult portable.Result
+	var archiveResult portable.ArchiveResult
+	var embeddedResult embedded.Info
+	if options.embed {
+		applicationName := portable.ArtifactName(cfg.Project.Name, cfg.Project.ID)
+		if packageManifest.Target.OS == "windows" {
+			applicationName += ".exe"
+		}
+		embeddedResult, err = dependencies.buildEmbedded(context.Background(), embedded.Request{
+			RuntimePath: selectedRuntime.BinaryPath, PackagePath: packageResult.Path,
+			OutputPath:  filepath.Join(targetStage, applicationName),
+			PackageHash: packageResult.SHA256, ExecutableOS: packageManifest.Target.OS,
+		})
+		if err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to build embedded executable\ncaused by: %v\n", err)
+			return 1
+		}
+		if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(
+				stderr,
+				"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
+				packageManifest.Target.OS,
+				packageManifest.Target.Arch,
+			)
+			return 1
+		}
+		if _, err := dependencies.smokeExecutable(
+			context.Background(), embeddedResult.Path, targetStage, embeddedResult.PackageSHA256, 10*time.Second,
+		); err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: embedded executable smoke test failed\ncaused by: %v\n", err)
+			return 1
+		}
+		publishDestination = filepath.Join(publishTarget, applicationName)
+		if err := workspace.Publish(context.Background(), embeddedResult.Path, publishDestination); err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to publish embedded executable\ncaused by: %v\n", err)
+			return 1
+		}
+	} else {
+		portableResult, err = dependencies.buildPortable(context.Background(), portable.Request{
+			OutputRoot:    targetStage,
+			ProjectName:   cfg.Project.Name,
+			ProjectID:     cfg.Project.ID,
+			Version:       cfg.Project.Version,
+			TargetOS:      packageManifest.Target.OS,
+			TargetArch:    packageManifest.Target.Arch,
+			Terminal:      packageManifest.Target.Terminal,
+			PackagePath:   packageResult.Path,
+			PackageSHA256: packageResult.SHA256,
+			Runtime:       selectedRuntime,
+			SourceExposed: packageManifest.Build.SourceExposed,
+			SignaturePath: signatureResult.Path,
+			SignatureHash: signatureResult.SHA256,
+			SigningKeyID:  signatureResult.KeyID,
+		})
+		if err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to assemble portable application\ncaused by: %v\n", err)
+			return 1
+		}
+		if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(
+				stderr,
+				"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
+				packageManifest.Target.OS,
+				packageManifest.Target.Arch,
+			)
+			return 1
+		}
+		if err := dependencies.smokePortable(context.Background(), portableResult, 10*time.Second); err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: portable application smoke test failed\ncaused by: %v\n", err)
+			return 1
+		}
+		archiveResult, err = dependencies.archivePortable(context.Background(), portableResult, packageManifest.Target.OS)
+		if err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to create distribution archive\ncaused by: %v\n", err)
+			return 1
+		}
+		if err := workspace.Publish(context.Background(), targetStage, publishTarget); err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application and archive\ncaused by: %v\n", err)
+			return 1
+		}
+		publishDestination = filepath.Join(publishTarget, portableResult.Name)
 	}
-	publishDestination := filepath.Join(publishTarget, portableResult.Name)
 
 	version := identity.Version
 	if version == "" {
@@ -400,29 +457,41 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			return 1
 		}
 	}
-	if _, err = fmt.Fprintf(
-		stdout,
-		"Portable application verified\nOutput: %s\nExecutable: %s\nPackage: %s\n",
-		publishDestination,
-		filepath.Base(portableResult.Executable),
-		filepath.Base(portableResult.Package),
-	); err != nil {
-		_ = workspace.Cleanup()
-		writeString(stderr, "error: failed to write portable output\n")
-		return 1
-	}
-	if _, err = fmt.Fprintf(
-		stdout,
-		"Distribution archive: %s\nArchive format: %s\nArchive bytes: %d\nArchive SHA-256: %s\nChecksum: %s\n",
-		filepath.Join(publishTarget, filepath.Base(archiveResult.Path)),
-		archiveResult.Format,
-		archiveResult.Size,
-		archiveResult.SHA256,
-		filepath.Join(publishTarget, filepath.Base(archiveResult.ChecksumPath)),
-	); err != nil {
-		_ = workspace.Cleanup()
-		writeString(stderr, "error: failed to write archive output\n")
-		return 1
+	if options.embed {
+		if _, err = fmt.Fprintf(
+			stdout,
+			"Embedded executable verified\nOutput: %s\nExecutable bytes: %d\nExecutable SHA-256: %s\nPackage offset: %d\n",
+			publishDestination, embeddedResult.Size, embeddedResult.SHA256, embeddedResult.PackageOffset,
+		); err != nil {
+			_ = workspace.Cleanup()
+			writeString(stderr, "error: failed to write embedded output\n")
+			return 1
+		}
+	} else {
+		if _, err = fmt.Fprintf(
+			stdout,
+			"Portable application verified\nOutput: %s\nExecutable: %s\nPackage: %s\n",
+			publishDestination,
+			filepath.Base(portableResult.Executable),
+			filepath.Base(portableResult.Package),
+		); err != nil {
+			_ = workspace.Cleanup()
+			writeString(stderr, "error: failed to write portable output\n")
+			return 1
+		}
+		if _, err = fmt.Fprintf(
+			stdout,
+			"Distribution archive: %s\nArchive format: %s\nArchive bytes: %d\nArchive SHA-256: %s\nChecksum: %s\n",
+			filepath.Join(publishTarget, filepath.Base(archiveResult.Path)),
+			archiveResult.Format,
+			archiveResult.Size,
+			archiveResult.SHA256,
+			filepath.Join(publishTarget, filepath.Base(archiveResult.ChecksumPath)),
+		); err != nil {
+			_ = workspace.Cleanup()
+			writeString(stderr, "error: failed to write archive output\n")
+			return 1
+		}
 	}
 	if _, err = fmt.Fprintf(
 		stdout,
@@ -760,6 +829,8 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			options.keepWork = true
 		case "--include-source":
 			options.includeSource = true
+		case "--embed":
+			options.embed = true
 		case "--runtime-registry":
 			if index+1 >= len(args) {
 				return buildOptions{}, fmt.Errorf("--runtime-registry requires a directory path")

@@ -55,6 +55,14 @@ func Verify(path string) (Info, error) {
 	return info, nil
 }
 
+// VerifyReader validates an untrusted package region without extracting it.
+func VerifyReader(reader io.ReaderAt, size int64, label string) (Info, error) {
+	if reader == nil {
+		return Info{}, packageError(ErrorInvalid, "validate reader", label, errors.New("reader is required"))
+	}
+	return verifyReader(reader, size, label)
+}
+
 func verifyReader(reader io.ReaderAt, size int64, label string) (Info, error) {
 	if size < int64(headerSize) {
 		return Info{}, packageError(ErrorInvalid, "read header", label, errors.New("package is truncated"))

@@ -50,17 +50,26 @@ func Smoke(ctx context.Context, result Result, timeout time.Duration) error {
 
 // SmokeDetailed runs the self-test and returns its bounded output even on failure.
 func SmokeDetailed(ctx context.Context, result Result, timeout time.Duration) (SmokeReport, error) {
-	if timeout <= 0 {
-		timeout = defaultSmokeTimeout
-	}
 	packageInfo, err := flxpkg.Verify(result.Package)
 	if err != nil {
 		return SmokeReport{}, portableError(ErrorIntegrity, "pre-smoke package verification", result.Package, err)
 	}
+	return SmokeExecutable(ctx, result.Executable, result.Directory, packageInfo.SHA256, timeout)
+}
+
+// SmokeExecutable runs the self-test contract for a sibling or embedded package.
+func SmokeExecutable(ctx context.Context, executable, directory, expectedPackageHash string, timeout time.Duration) (SmokeReport, error) {
+	if executable == "" || directory == "" || len(expectedPackageHash) != 64 {
+		return SmokeReport{}, portableError(ErrorInvalid, "validate package self-test request", executable,
+			errors.New("executable, directory, and package SHA-256 are required"))
+	}
+	if timeout <= 0 {
+		timeout = defaultSmokeTimeout
+	}
 	execution, err := executor.Run(ctx, executor.Request{
-		Path:      result.Executable,
+		Path:      executable,
 		Args:      []string{"--fluxa-package-self-test"},
-		Dir:       result.Directory,
+		Dir:       directory,
 		Timeout:   timeout,
 		MaxStdout: maxSmokeStdout,
 		MaxStderr: maxSmokeStderr,
@@ -92,12 +101,12 @@ func SmokeDetailed(ctx context.Context, result Result, timeout time.Duration) (S
 		if executionError == nil || executionError.Kind != executor.ErrorExit {
 			detail = errors.Join(err, textError(execution.Stderr))
 		}
-		return report, portableError(kind, "run package self-test", result.Executable, detail)
+		return report, portableError(kind, "run package self-test", executable, detail)
 	}
 
 	response, err := decodeSmokeResponse(execution.Stdout)
 	if err != nil {
-		return report, portableError(ErrorSmokeProtocol, "decode package self-test response", result.Executable, err)
+		return report, portableError(ErrorSmokeProtocol, "decode package self-test response", executable, err)
 	}
 	report.Protocol = response.Protocol
 	report.PackageSHA256 = response.PackageSHA256
@@ -106,23 +115,23 @@ func SmokeDetailed(ctx context.Context, result Result, timeout time.Duration) (S
 	report.UIOpened = response.UIOpened
 
 	if response.Protocol != smokeProtocol {
-		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", result.Executable,
+		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", executable,
 			fmt.Errorf("unsupported protocol %q", response.Protocol))
 	}
 	if !response.PackageOpened {
-		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", result.Executable,
+		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", executable,
 			errors.New("runtime did not confirm that the package was opened"))
 	}
-	if response.PackageSHA256 != packageInfo.SHA256 {
-		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", result.Executable,
-			fmt.Errorf("runtime opened package sha256 %q, expected %q", response.PackageSHA256, packageInfo.SHA256))
+	if response.PackageSHA256 != expectedPackageHash {
+		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", executable,
+			fmt.Errorf("runtime opened package sha256 %q, expected %q", response.PackageSHA256, expectedPackageHash))
 	}
 	if !response.VMCompatible {
-		return report, portableError(ErrorSmokeIncompatible, "validate package self-test response", result.Executable,
+		return report, portableError(ErrorSmokeIncompatible, "validate package self-test response", executable,
 			errors.New("runtime reported incompatible VM or package"))
 	}
 	if response.UIOpened {
-		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", result.Executable,
+		return report, portableError(ErrorSmokeProtocol, "validate package self-test response", executable,
 			errors.New("self-test opened the application UI"))
 	}
 	return report, nil

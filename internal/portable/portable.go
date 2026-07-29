@@ -282,6 +282,11 @@ func artifactName(name, projectID string) string {
 	return result
 }
 
+// ArtifactName returns the deterministic filesystem name used for an application.
+func ArtifactName(name, projectID string) string {
+	return artifactName(name, projectID)
+}
+
 func windowsReservedName(value string) bool {
 	switch strings.ToLower(value) {
 	case "con", "prn", "aux", "nul",
