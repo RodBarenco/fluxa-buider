@@ -27,7 +27,8 @@ func TestCompileStagesMinimalDevelopmentSource(t *testing.T) {
 	if result.Format != compiler.FormatSource || !result.Debug || !result.SourceExposed || result.BytecodeABI != "" {
 		t.Fatalf("Compile() result = %#v, want exposed debug source without bytecode ABI", result)
 	}
-	if len(result.Artifacts) != 1 || result.Artifacts[0].Path != "source/main.flx" {
+	if len(result.Artifacts) != 1 || result.Artifacts[0].Path != "source/main.flx" ||
+		result.Artifacts[0].LogicalPath != "main.flx" {
 		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
 	data, err := os.ReadFile(filepath.Join(output, "source", "main.flx")) // #nosec G304 -- test-controlled temporary path.

@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -85,20 +89,24 @@ type buildOptions struct {
 }
 
 type buildDependencies struct {
-	resolve      func(toolchain.ResolveOptions) (toolchain.Candidate, error)
-	probe        func(context.Context, string, time.Duration) (toolchain.Identity, error)
-	newWorkspace func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
-	collect      func(context.Context, *project.Config) (collector.Result, error)
-	compile      func(context.Context, compiler.Request) (compiler.Result, error)
+	resolve       func(toolchain.ResolveOptions) (toolchain.Candidate, error)
+	probe         func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	newWorkspace  func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
+	collect       func(context.Context, *project.Config) (collector.Result, error)
+	compile       func(context.Context, compiler.Request) (compiler.Result, error)
+	newManifest   func(context.Context, manifest.Input) (manifest.Manifest, error)
+	writeManifest func(string, manifest.Manifest) error
 }
 
 func defaultBuildDependencies() buildDependencies {
 	return buildDependencies{
-		resolve:      toolchain.Resolve,
-		probe:        toolchain.Probe,
-		newWorkspace: buildpkg.NewWorkspace,
-		collect:      collector.CollectProject,
-		compile:      compiler.Compile,
+		resolve:       toolchain.Resolve,
+		probe:         toolchain.Probe,
+		newWorkspace:  buildpkg.NewWorkspace,
+		collect:       collector.CollectProject,
+		compile:       compiler.Compile,
+		newManifest:   manifest.New,
+		writeManifest: manifest.WriteFile,
 	}
 }
 
@@ -164,6 +172,32 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		return 1
 	}
 
+	targetOS, targetArch, err := resolveManifestTarget(cfg.Build.Target)
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to resolve build target\ncaused by: %v\n", err)
+		return 1
+	}
+	packageManifest, err := dependencies.newManifest(context.Background(), manifest.Input{
+		Project:     cfg,
+		Toolchain:   identity,
+		Compilation: compilation,
+		Collection:  collection,
+		TargetOS:    targetOS,
+		TargetArch:  targetArch,
+	})
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to create package manifest\ncaused by: %v\n", err)
+		return 1
+	}
+	manifestPath := filepath.Join(workspace.PackageDir, "manifest.json")
+	if err := dependencies.writeManifest(manifestPath, packageManifest); err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to write package manifest\ncaused by: %v\n", err)
+		return 1
+	}
+
 	version := identity.Version
 	if version == "" {
 		version = "not reported"
@@ -203,6 +237,11 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			return 1
 		}
 	}
+	if _, err = fmt.Fprintf(stdout, "Manifest schema: %d\nManifest files: %d\n", packageManifest.FormatVersion, len(packageManifest.Files)); err != nil {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: failed to write manifest output\n")
+		return 1
+	}
 	if options.keepWork {
 		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
 	} else {
@@ -213,8 +252,35 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after development source staging; manifest generation is not implemented yet\n")
+	writeString(stderr, "error: build stopped after deterministic manifest generation; package writing is not implemented yet\n")
 	return 1
+}
+
+func resolveManifestTarget(configured string) (string, string, error) {
+	if configured == "host" {
+		osName := runtime.GOOS
+		if osName == "darwin" {
+			osName = "macos"
+		}
+		return osName, runtime.GOARCH, nil
+	}
+	parts := strings.Split(configured, "-")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("target %q must be host or <os>-<arch>", configured)
+	}
+	osName := parts[0]
+	if osName != "windows" && osName != "linux" && osName != "macos" {
+		return "", "", fmt.Errorf("unsupported target operating system %q", osName)
+	}
+	arch := parts[1]
+	switch arch {
+	case "x64":
+		arch = "amd64"
+	case "arm64":
+	default:
+		return "", "", fmt.Errorf("unsupported target architecture %q", arch)
+	}
+	return osName, arch, nil
 }
 
 func parseBuildOptions(args []string) (buildOptions, error) {

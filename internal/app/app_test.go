@@ -12,6 +12,7 @@ import (
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -146,9 +147,11 @@ terminal = false
 				SHA256:   strings.Repeat("a", 64),
 			}, nil
 		},
-		newWorkspace: buildpkg.NewWorkspace,
-		collect:      collector.CollectProject,
-		compile:      compiler.Compile,
+		newWorkspace:  buildpkg.NewWorkspace,
+		collect:       collector.CollectProject,
+		compile:       compiler.Compile,
+		newManifest:   manifest.New,
+		writeManifest: manifest.WriteFile,
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
@@ -167,7 +170,10 @@ terminal = false
 		!strings.Contains(stdout.String(), "not a secure release") {
 		t.Fatalf("Run(build) stdout = %q, want exposed-source warning", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "manifest generation is not implemented yet") {
+	if !strings.Contains(stdout.String(), "Manifest schema: 1") {
+		t.Fatalf("Run(build) stdout = %q, want manifest summary", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "package writing is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
@@ -177,6 +183,40 @@ terminal = false
 	}
 	if len(entries) != 0 {
 		t.Fatalf("workspace was not cleaned: %v", entries)
+	}
+}
+
+func TestResolveManifestTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		wantOS   string
+		wantArch string
+		wantErr  bool
+	}{
+		{input: "linux-x64", wantOS: "linux", wantArch: "amd64"},
+		{input: "windows-arm64", wantOS: "windows", wantArch: "arm64"},
+		{input: "macos-x64", wantOS: "macos", wantArch: "amd64"},
+		{input: "freebsd-x64", wantErr: true},
+		{input: "linux-386", wantErr: true},
+		{input: "invalid", wantErr: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			gotOS, gotArch, err := resolveManifestTarget(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("resolveManifestTarget() error = nil")
+				}
+				return
+			}
+			if err != nil || gotOS != tt.wantOS || gotArch != tt.wantArch {
+				t.Fatalf("resolveManifestTarget() = %q, %q, %v", gotOS, gotArch, err)
+			}
+		})
 	}
 }
 

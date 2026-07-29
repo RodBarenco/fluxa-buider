@@ -33,9 +33,10 @@ type Request struct {
 
 // Artifact describes one staged program file.
 type Artifact struct {
-	Path   string
-	Size   int64
-	SHA256 string
+	Path        string
+	LogicalPath string
+	Size        int64
+	SHA256      string
 }
 
 // Result records the security and compatibility properties of generated files.
@@ -163,9 +164,10 @@ func copySource(outputRoot string, file collector.Entry) (Artifact, error) {
 	}
 
 	return Artifact{
-		Path:   filepath.ToSlash(filepath.Join("source", filepath.FromSlash(logical))),
-		Size:   written,
-		SHA256: fmt.Sprintf("%x", hash.Sum(nil)),
+		Path:        filepath.ToSlash(filepath.Join("source", filepath.FromSlash(logical))),
+		LogicalPath: logical,
+		Size:        written,
+		SHA256:      fmt.Sprintf("%x", hash.Sum(nil)),
 	}, nil
 }
 

@@ -37,6 +37,14 @@ assets, and `build-info.json`. Categorized physical asset paths require a
 runtime-supported mapping in the package manifest. Until that contract exists,
 release generation must preserve each asset's logical path.
 
+## Deterministic manifest
+
+Manifest schema v1 separates package paths from project logical paths. Program
+artifacts live in the `program/` namespace and assets in `resources/`. It
+records hashes and all security-relevant build state, including
+`preflight: not_run` and source exposure, while excluding timestamps, absolute
+paths, workspace IDs, and other build-machine data.
+
 ## External processes
 
 All process execution is centralized in `internal/executor`. Callers pass an
