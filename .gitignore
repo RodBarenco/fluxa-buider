@@ -1,0 +1,9 @@
+/bin/
+/dist/
+/.fluxa-builder/
+/.vscode/
+*.test
+*.out
+HANDOFF.md
+PLANO_COMPLETO_FLUXA_BUILDER_AGENT.md
+.gitignore

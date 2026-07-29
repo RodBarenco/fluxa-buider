@@ -1,0 +1,8 @@
+[project]
+name = "Minimal Fluxa Application"
+id = "com.fluxa.examples.minimal"
+version = "0.1.0"
+entry = "main.flx"
+
+[build]
+terminal = true
