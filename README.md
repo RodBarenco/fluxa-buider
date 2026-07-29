@@ -12,9 +12,12 @@ available for a complete operation is:
 fluxa-builder version
 ```
 
-`fluxa-builder build [project] [--fluxa <path>]` currently loads and validates
-`fluxa.toml`, locates and probes the Fluxa toolchain through the secure command
-executor, then stops before creation of the transactional build workspace.
+`fluxa-builder build [project] [--fluxa <path>] [--keep-work]` currently loads
+and validates `fluxa.toml`, locates and probes the Fluxa toolchain, creates and
+cleans an isolated transactional workspace, then stops before file collection.
+
+`--keep-work` retains `.fluxa-builder/work/<build-id>` for debugging. It should
+not be used in routine builds.
 
 ## Fluxa project validation
 
@@ -23,6 +26,16 @@ preflight command is experimental and may execute the program after successful
 validation. Users must test their Fluxa project before running the Builder.
 Future reports will record this as `preflight: not_run`, not as a successful
 Builder validation.
+
+Run the project explicitly before packaging:
+
+```sh
+fluxa run main.flx -proj .
+```
+
+Replace `main.flx` with `project.entry` and `.` with the project root when
+needed. The Builder does not run this command automatically because it executes
+the application with its real side effects and may be long-running.
 
 Project configuration is documented in `docs/configuration.md`.
 

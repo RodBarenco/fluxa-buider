@@ -17,6 +17,14 @@ config → validation → toolchain → preflight → collection/compilation
 
 Builds use an isolated workspace and publish final artifacts atomically.
 
+## Transactional workspace
+
+Each build uses `.fluxa-builder/work/<random-id>` below the canonical project
+root, with separate compiled, package, runtime, output, and report directories.
+The tree is private, symlink-guarded, and removed on completion unless
+`--keep-work` was explicitly requested. Only a completed tree under workspace
+`output/` may be atomically renamed into the project output directory.
+
 ## External processes
 
 All process execution is centralized in `internal/executor`. Callers pass an

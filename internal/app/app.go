@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -63,7 +64,7 @@ func printUsage(w io.Writer) error {
 	_, err := fmt.Fprintf(w, `Fluxa Builder %s
 
 Usage:
-  fluxa-builder build [project] [--fluxa <path>]
+  fluxa-builder build [project] [--fluxa <path>] [--keep-work]
   fluxa-builder version
   fluxa-builder help
 `, Version)
@@ -77,17 +78,20 @@ func writeString(w io.Writer, value string) {
 type buildOptions struct {
 	projectPath string
 	fluxaPath   string
+	keepWork    bool
 }
 
 type buildDependencies struct {
-	resolve func(toolchain.ResolveOptions) (toolchain.Candidate, error)
-	probe   func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	resolve      func(toolchain.ResolveOptions) (toolchain.Candidate, error)
+	probe        func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	newWorkspace func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
 	return buildDependencies{
-		resolve: toolchain.Resolve,
-		probe:   toolchain.Probe,
+		resolve:      toolchain.Resolve,
+		probe:        toolchain.Probe,
+		newWorkspace: buildpkg.NewWorkspace,
 	}
 }
 
@@ -127,6 +131,14 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		return 1
 	}
 
+	workspace, err := dependencies.newWorkspace(context.Background(), cfg.Root, buildpkg.WorkspaceOptions{
+		KeepWork: options.keepWork,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to create transactional workspace\ncaused by: %v\n", err)
+		return 1
+	}
+
 	version := identity.Version
 	if version == "" {
 		version = "not reported"
@@ -146,11 +158,22 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		identity.SHA256,
 	)
 	if err != nil {
+		_ = workspace.Cleanup()
 		writeString(stderr, "error: failed to write build output\n")
 		return 1
 	}
 
-	writeString(stderr, "error: build stopped after toolchain validation; transactional workspace is not implemented yet\n")
+	if options.keepWork {
+		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
+	} else {
+		if err := workspace.Cleanup(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "error: failed to clean transactional workspace\ncaused by: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
+	}
+
+	writeString(stderr, "error: build stopped after transactional workspace; file collection is not implemented yet\n")
 	return 1
 }
 
@@ -167,6 +190,8 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			}
 			index++
 			options.fluxaPath = args[index]
+		case "--keep-work":
+			options.keepWork = true
 		default:
 			if len(arg) > 0 && arg[0] == '-' {
 				return buildOptions{}, fmt.Errorf("unknown build option %q", arg)

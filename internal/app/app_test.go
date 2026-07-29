@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -143,6 +144,7 @@ terminal = false
 				SHA256:   strings.Repeat("a", 64),
 			}, nil
 		},
+		newWorkspace: buildpkg.NewWorkspace,
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa"}, &stdout, &stderr, dependencies)
 
@@ -154,8 +156,16 @@ terminal = false
 		!strings.Contains(stdout.String(), "Fluxa toolchain selected") {
 		t.Fatalf("Run(build) stdout = %q, want loaded project summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "transactional workspace is not implemented yet") {
+	if !strings.Contains(stderr.String(), "file collection is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
+	}
+	workDir := filepath.Join(root, ".fluxa-builder", "work")
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		t.Fatalf("ReadDir(work) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("workspace was not cleaned: %v", entries)
 	}
 }
 
@@ -197,6 +207,11 @@ func TestParseBuildOptions(t *testing.T) {
 			name: "flag then project",
 			args: []string{"--fluxa", "/opt/fluxa", "my project"},
 			want: buildOptions{projectPath: "my project", fluxaPath: "/opt/fluxa"},
+		},
+		{
+			name: "keep workspace",
+			args: []string{"my project", "--keep-work"},
+			want: buildOptions{projectPath: "my project", keepWork: true},
 		},
 		{
 			name:      "missing flag value",
