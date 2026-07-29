@@ -89,6 +89,12 @@ All project content paths and patterns must be relative, must not contain `..`,
 and must remain inside the project after symbolic links are resolved. Absolute,
 drive-qualified, UNC, and NUL-containing paths are rejected.
 
+Asset patterns select content for the build; they do not dictate how the source
+project must be organized. `**` matches across directory boundaries. Selected
+paths are normalized to `/`, sorted deterministically, and retained as logical
+project paths. Overlapping patterns select a file only once. Case-only
+collisions and selected symlinks that escape the project are rejected.
+
 The initial package formats accepted by configuration are `portable` and `zip`.
 Only `portable` is part of the first functional milestone.
 

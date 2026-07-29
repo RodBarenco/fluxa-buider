@@ -9,6 +9,7 @@ import (
 	"time"
 
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
+	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -85,6 +86,7 @@ type buildDependencies struct {
 	resolve      func(toolchain.ResolveOptions) (toolchain.Candidate, error)
 	probe        func(context.Context, string, time.Duration) (toolchain.Identity, error)
 	newWorkspace func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
+	collect      func(context.Context, *project.Config) (collector.Result, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -92,6 +94,7 @@ func defaultBuildDependencies() buildDependencies {
 		resolve:      toolchain.Resolve,
 		probe:        toolchain.Probe,
 		newWorkspace: buildpkg.NewWorkspace,
+		collect:      collector.CollectProject,
 	}
 }
 
@@ -139,6 +142,13 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		return 1
 	}
 
+	collection, err := dependencies.collect(context.Background(), cfg)
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to collect project files\ncaused by: %v\n", err)
+		return 1
+	}
+
 	version := identity.Version
 	if version == "" {
 		version = "not reported"
@@ -146,7 +156,8 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	_, err = fmt.Fprintf(
 		stdout,
 		"Project configuration valid\nProject: %s\nVersion: %s\nEntry: %s\nTarget: %s\nTerminal: %t\n"+
-			"Fluxa toolchain selected\nPath: %s\nSource: %s\nVersion: %s\nSHA-256: %s\n",
+			"Fluxa toolchain selected\nPath: %s\nSource: %s\nVersion: %s\nSHA-256: %s\n"+
+			"Files collected: %d\nCollected bytes: %d\n",
 		cfg.Project.Name,
 		cfg.Project.Version,
 		cfg.Project.Entry,
@@ -156,13 +167,14 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		candidate.Source,
 		version,
 		identity.SHA256,
+		len(collection.Entries),
+		collection.TotalSize,
 	)
 	if err != nil {
 		_ = workspace.Cleanup()
 		writeString(stderr, "error: failed to write build output\n")
 		return 1
 	}
-
 	if options.keepWork {
 		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
 	} else {
@@ -173,7 +185,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after transactional workspace; file collection is not implemented yet\n")
+	writeString(stderr, "error: build stopped after deterministic file collection; compilation is not implemented yet\n")
 	return 1
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
+	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -145,6 +146,7 @@ terminal = false
 			}, nil
 		},
 		newWorkspace: buildpkg.NewWorkspace,
+		collect:      collector.CollectProject,
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa"}, &stdout, &stderr, dependencies)
 
@@ -156,7 +158,10 @@ terminal = false
 		!strings.Contains(stdout.String(), "Fluxa toolchain selected") {
 		t.Fatalf("Run(build) stdout = %q, want loaded project summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "file collection is not implemented yet") {
+	if !strings.Contains(stdout.String(), "Files collected: 1") {
+		t.Fatalf("Run(build) stdout = %q, want collection summary", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "compilation is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")

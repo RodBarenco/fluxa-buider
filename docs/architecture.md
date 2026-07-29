@@ -25,6 +25,18 @@ The tree is private, symlink-guarded, and removed on completion unless
 `--keep-work` was explicitly requested. Only a completed tree under workspace
 `output/` may be atomically renamed into the project output directory.
 
+## File collection and release paths
+
+Collection preserves normalized project-relative paths and produces a stable
+lexicographically sorted inventory. Entry files, Fluxa modules, and configured
+assets carry logical kind metadata; this classification does not move source
+files or alter paths used by the runtime.
+
+The final ZIP is intended to separate the executable, Fluxa package, categorized
+assets, and `build-info.json`. Categorized physical asset paths require a
+runtime-supported mapping in the package manifest. Until that contract exists,
+release generation must preserve each asset's logical path.
+
 ## External processes
 
 All process execution is centralized in `internal/executor`. Callers pass an
