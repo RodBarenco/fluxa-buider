@@ -13,6 +13,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
+	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -152,6 +153,7 @@ terminal = false
 		compile:       compiler.Compile,
 		newManifest:   manifest.New,
 		writeManifest: manifest.WriteFile,
+		writePackage:  flxpkg.Write,
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
@@ -173,7 +175,10 @@ terminal = false
 	if !strings.Contains(stdout.String(), "Manifest schema: 1") {
 		t.Fatalf("Run(build) stdout = %q, want manifest summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "package writing is not implemented yet") {
+	if !strings.Contains(stdout.String(), "Fluxa package: com.example.cli-test-1.0.0.flxpkg") {
+		t.Fatalf("Run(build) stdout = %q, want package summary", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "runtime selection is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")

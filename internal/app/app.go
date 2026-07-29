@@ -15,6 +15,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
+	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -37,6 +38,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "build":
 		return runBuild(args[1:], stdout, stderr, defaultBuildDependencies())
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
+	case "verify":
+		return runVerify(args[1:], stdout, stderr)
 	case "version":
 		if len(args) != 1 {
 			writeString(stderr, "error: version does not accept arguments\n")
@@ -71,6 +76,8 @@ func printUsage(w io.Writer) error {
 
 Usage:
   fluxa-builder build [project] [--fluxa <path>] [--include-source] [--keep-work]
+  fluxa-builder inspect <file.flxpkg>
+  fluxa-builder verify <file.flxpkg>
   fluxa-builder version
   fluxa-builder help
 `, Version)
@@ -96,6 +103,7 @@ type buildDependencies struct {
 	compile       func(context.Context, compiler.Request) (compiler.Result, error)
 	newManifest   func(context.Context, manifest.Input) (manifest.Manifest, error)
 	writeManifest func(string, manifest.Manifest) error
+	writePackage  func(context.Context, flxpkg.Request) (flxpkg.Result, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -107,6 +115,7 @@ func defaultBuildDependencies() buildDependencies {
 		compile:       compiler.Compile,
 		newManifest:   manifest.New,
 		writeManifest: manifest.WriteFile,
+		writePackage:  flxpkg.Write,
 	}
 }
 
@@ -197,6 +206,18 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to write package manifest\ncaused by: %v\n", err)
 		return 1
 	}
+	packagePath := filepath.Join(workspace.PackageDir, cfg.Project.ID+"-"+cfg.Project.Version+".flxpkg")
+	packageResult, err := dependencies.writePackage(context.Background(), flxpkg.Request{
+		OutputPath: packagePath,
+		Manifest:   packageManifest,
+		Sources:    packageSources(workspace.CompiledDir, collection, compilation),
+		Compress:   cfg.Package.Compress,
+	})
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to write Fluxa package\ncaused by: %v\n", err)
+		return 1
+	}
 
 	version := identity.Version
 	if version == "" {
@@ -242,6 +263,17 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		writeString(stderr, "error: failed to write manifest output\n")
 		return 1
 	}
+	if _, err = fmt.Fprintf(
+		stdout,
+		"Fluxa package: %s\nPackage bytes: %d\nPackage SHA-256: %s\n",
+		filepath.Base(packageResult.Path),
+		packageResult.Size,
+		packageResult.SHA256,
+	); err != nil {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: failed to write package output\n")
+		return 1
+	}
 	if options.keepWork {
 		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
 	} else {
@@ -252,8 +284,70 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after deterministic manifest generation; package writing is not implemented yet\n")
+	writeString(stderr, "error: build stopped after verified package writing; runtime selection is not implemented yet\n")
 	return 1
+}
+
+func packageSources(compiledDir string, collection collector.Result, compilation compiler.Result) map[string]string {
+	sources := make(map[string]string, len(compilation.Artifacts)+len(collection.Entries))
+	for _, artifact := range compilation.Artifacts {
+		sources["program/"+artifact.Path] = filepath.Join(compiledDir, filepath.FromSlash(artifact.Path))
+	}
+	for _, entry := range collection.Entries {
+		if entry.Kind == collector.KindAsset {
+			sources["resources/"+entry.Path] = entry.SourcePath
+		}
+	}
+	return sources
+}
+
+func runVerify(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		writeString(stderr, "error: verify requires exactly one .flxpkg path\n")
+		return 2
+	}
+	info, err := flxpkg.Verify(args[0])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: package verification failed\ncaused by: %v\n", err)
+		return 1
+	}
+	if _, err := fmt.Fprintf(stdout, "valid Fluxa package\nFiles: %d\nBytes: %d\nSHA-256: %s\n", len(info.Entries), info.Size, info.SHA256); err != nil {
+		writeString(stderr, "error: failed to write verification output\n")
+		return 1
+	}
+	return 0
+}
+
+func runInspect(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		writeString(stderr, "error: inspect requires exactly one .flxpkg path\n")
+		return 2
+	}
+	info, err := flxpkg.Verify(args[0])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: package inspection failed\ncaused by: %v\n", err)
+		return 1
+	}
+	if _, err := fmt.Fprintf(
+		stdout,
+		"Fluxa Package v%d\nProject: %s\nID: %s\nVersion: %s\nTarget: %s/%s\n"+
+			"Program format: %s\nSource exposed: %t\nFiles: %d\nBytes: %d\nSHA-256: %s\n",
+		info.FormatVersion,
+		info.Manifest.Project.Name,
+		info.Manifest.Project.ID,
+		info.Manifest.Project.Version,
+		info.Manifest.Target.OS,
+		info.Manifest.Target.Arch,
+		info.Manifest.Build.ProgramFormat,
+		info.Manifest.Build.SourceExposed,
+		len(info.Entries),
+		info.Size,
+		info.SHA256,
+	); err != nil {
+		writeString(stderr, "error: failed to write inspection output\n")
+		return 1
+	}
+	return 0
 }
 
 func resolveManifestTarget(configured string) (string, string, error) {

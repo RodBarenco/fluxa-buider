@@ -87,6 +87,13 @@ release. For development of the remaining packaging pipeline only,
 `--include-source` stages `.flx` program files and prints a source-exposure
 warning. Without that explicit option, compilation fails closed.
 
+Generated `.flxpkg` files can be checked independently:
+
+```sh
+fluxa-builder inspect application.flxpkg
+fluxa-builder verify application.flxpkg
+```
+
 ## Versioning
 
 Fluxa Builder follows Semantic Versioning. While the version is below `1.0.0`,

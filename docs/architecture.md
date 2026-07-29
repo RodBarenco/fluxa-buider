@@ -45,6 +45,14 @@ records hashes and all security-relevant build state, including
 `preflight: not_run` and source exposure, while excluding timestamps, absolute
 paths, workspace IDs, and other build-machine data.
 
+## Fluxa package
+
+`.flxpkg` format v1 is a deterministic little-endian container with a fixed
+header, canonical manifest, sorted binary file table, and contiguous payload.
+Each entry hashes its original bytes; the header hashes the manifest, table,
+and stored payload. Optional zlib compression is per entry. Package publication
+occurs only after the temporary file is synced, reopened, and fully verified.
+
 ## External processes
 
 All process execution is centralized in `internal/executor`. Callers pass an
