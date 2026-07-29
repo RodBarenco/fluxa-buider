@@ -154,7 +154,7 @@ terminal = false
 		!strings.Contains(stdout.String(), "Fluxa toolchain selected") {
 		t.Fatalf("Run(build) stdout = %q, want loaded project summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "project preflight is not implemented yet") {
+	if !strings.Contains(stderr.String(), "transactional workspace is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 }

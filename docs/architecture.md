@@ -25,6 +25,13 @@ executor applies deadlines, bounded stdout/stderr capture, cancellation, and
 structured exit diagnostics. Direct use of `os/exec` outside that package is an
 architectural violation.
 
+## Fluxa preflight
+
+Automatic language preflight is deferred by ADR 0006. The current Fluxa
+command is experimental and may execute user code after validation. The Builder
+therefore treats a tested Fluxa project as an external prerequisite and must
+never label the skipped check as passed.
+
 ## Toolchain contract
 
 The current Fluxa CLI has no public `--version` command. Discovery uses the

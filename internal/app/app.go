@@ -150,7 +150,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		return 1
 	}
 
-	writeString(stderr, "error: build stopped after secure command execution; project preflight is not implemented yet\n")
+	writeString(stderr, "error: build stopped after toolchain validation; transactional workspace is not implemented yet\n")
 	return 1
 }
 

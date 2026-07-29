@@ -14,7 +14,15 @@ fluxa-builder version
 
 `fluxa-builder build [project] [--fluxa <path>]` currently loads and validates
 `fluxa.toml`, locates and probes the Fluxa toolchain through the secure command
-executor, then stops at the documented Phase 3 boundary before preflight.
+executor, then stops before creation of the transactional build workspace.
+
+## Fluxa project validation
+
+Automatic Fluxa preflight is intentionally disabled. The current Fluxa
+preflight command is experimental and may execute the program after successful
+validation. Users must test their Fluxa project before running the Builder.
+Future reports will record this as `preflight: not_run`, not as a successful
+Builder validation.
 
 Project configuration is documented in `docs/configuration.md`.
 
