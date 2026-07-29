@@ -52,6 +52,14 @@ command is experimental and may execute user code after validation. The Builder
 therefore treats a tested Fluxa project as an external prerequisite and must
 never label the skipped check as passed.
 
+## Compilation boundary
+
+Release compilation is blocked until Fluxa exposes a stable, non-executing
+compile command with bytecode version and ABI metadata. The explicit
+`--include-source` fallback stages program sources only for development and
+marks the result as source-exposed. Assets remain collector inputs for later
+packaging and are not copied into the compiler output.
+
 ## Toolchain contract
 
 The current Fluxa CLI has no public `--version` command. Discovery uses the

@@ -10,6 +10,7 @@ import (
 
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
+	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -65,7 +66,7 @@ func printUsage(w io.Writer) error {
 	_, err := fmt.Fprintf(w, `Fluxa Builder %s
 
 Usage:
-  fluxa-builder build [project] [--fluxa <path>] [--keep-work]
+  fluxa-builder build [project] [--fluxa <path>] [--include-source] [--keep-work]
   fluxa-builder version
   fluxa-builder help
 `, Version)
@@ -77,9 +78,10 @@ func writeString(w io.Writer, value string) {
 }
 
 type buildOptions struct {
-	projectPath string
-	fluxaPath   string
-	keepWork    bool
+	projectPath   string
+	fluxaPath     string
+	keepWork      bool
+	includeSource bool
 }
 
 type buildDependencies struct {
@@ -87,6 +89,7 @@ type buildDependencies struct {
 	probe        func(context.Context, string, time.Duration) (toolchain.Identity, error)
 	newWorkspace func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
 	collect      func(context.Context, *project.Config) (collector.Result, error)
+	compile      func(context.Context, compiler.Request) (compiler.Result, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -95,6 +98,7 @@ func defaultBuildDependencies() buildDependencies {
 		probe:        toolchain.Probe,
 		newWorkspace: buildpkg.NewWorkspace,
 		collect:      collector.CollectProject,
+		compile:      compiler.Compile,
 	}
 }
 
@@ -149,6 +153,17 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		return 1
 	}
 
+	compilation, err := dependencies.compile(context.Background(), compiler.Request{
+		Files:         collection.Entries,
+		OutputDir:     workspace.CompiledDir,
+		IncludeSource: options.includeSource || cfg.Package.IncludeSource,
+	})
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to compile Fluxa project\ncaused by: %v\n", err)
+		return 1
+	}
+
 	version := identity.Version
 	if version == "" {
 		version = "not reported"
@@ -175,6 +190,19 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		writeString(stderr, "error: failed to write build output\n")
 		return 1
 	}
+	if compilation.SourceExposed {
+		_, err = fmt.Fprintf(
+			stdout,
+			"Compilation mode: development/source-exposed\nProgram artifacts: %d\n"+
+				"WARNING: this artifact contains Fluxa source and is not a secure release\n",
+			len(compilation.Artifacts),
+		)
+		if err != nil {
+			_ = workspace.Cleanup()
+			writeString(stderr, "error: failed to write compilation output\n")
+			return 1
+		}
+	}
 	if options.keepWork {
 		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
 	} else {
@@ -185,7 +213,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after deterministic file collection; compilation is not implemented yet\n")
+	writeString(stderr, "error: build stopped after development source staging; manifest generation is not implemented yet\n")
 	return 1
 }
 
@@ -204,6 +232,8 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			options.fluxaPath = args[index]
 		case "--keep-work":
 			options.keepWork = true
+		case "--include-source":
+			options.includeSource = true
 		default:
 			if len(arg) > 0 && arg[0] == '-' {
 				return buildOptions{}, fmt.Errorf("unknown build option %q", arg)

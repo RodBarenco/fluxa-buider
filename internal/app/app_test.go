@@ -11,6 +11,7 @@ import (
 
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
+	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -147,8 +148,9 @@ terminal = false
 		},
 		newWorkspace: buildpkg.NewWorkspace,
 		collect:      collector.CollectProject,
+		compile:      compiler.Compile,
 	}
-	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa"}, &stdout, &stderr, dependencies)
+	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
 	if code != 1 {
 		t.Fatalf("Run(build) code = %d, want 1", code)
@@ -161,7 +163,11 @@ terminal = false
 	if !strings.Contains(stdout.String(), "Files collected: 1") {
 		t.Fatalf("Run(build) stdout = %q, want collection summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "compilation is not implemented yet") {
+	if !strings.Contains(stdout.String(), "development/source-exposed") ||
+		!strings.Contains(stdout.String(), "not a secure release") {
+		t.Fatalf("Run(build) stdout = %q, want exposed-source warning", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "manifest generation is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
@@ -217,6 +223,11 @@ func TestParseBuildOptions(t *testing.T) {
 			name: "keep workspace",
 			args: []string{"my project", "--keep-work"},
 			want: buildOptions{projectPath: "my project", keepWork: true},
+		},
+		{
+			name: "explicit development source fallback",
+			args: []string{"my project", "--include-source"},
+			want: buildOptions{projectPath: "my project", includeSource: true},
 		},
 		{
 			name:      "missing flag value",

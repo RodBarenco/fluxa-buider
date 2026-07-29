@@ -98,6 +98,12 @@ collisions and selected symlinks that escape the project are rejected.
 The initial package formats accepted by configuration are `portable` and `zip`.
 Only `portable` is part of the first functional milestone.
 
+`package.include_source = true` is equivalent to the explicit
+`--include-source` build option. It enables a development-only fallback while
+Fluxa has no stable compile command. The resulting artifact contains readable
+`.flx` files, keeps debug behavior, has no bytecode ABI, and is not a secure
+release. The default `false` fails closed at compilation.
+
 ## Toolchain selection
 
 The executable is selected in this order:

@@ -82,6 +82,11 @@ and produce a portable application containing a compatible Fluxa runtime,
 package, and build report. Implementation proceeds one reviewed phase at a
 time; see `PLANO_COMPLETO_FLUXA_BUILDER_AGENT.md`.
 
+Fluxa does not yet expose the stable compile command required for a protected
+release. For development of the remaining packaging pipeline only,
+`--include-source` stages `.flx` program files and prints a source-exposure
+warning. Without that explicit option, compilation fails closed.
+
 ## Versioning
 
 Fluxa Builder follows Semantic Versioning. While the version is below `1.0.0`,
