@@ -52,5 +52,4 @@ not published yet.
 Only a successful host smoke test allows the workspace directory to be renamed
 atomically into `dist`. Existing destinations are never replaced.
 
-The basic contract is introduced here to prevent untested publication. Phase 13
-will add richer timeout, crash, and log diagnostics.
+The detailed response and failure contract is defined by ADR 0015.

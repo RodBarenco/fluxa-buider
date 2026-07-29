@@ -89,8 +89,12 @@ func TestSmokeStartsApplicationAndRejectsFailureOrTamperedPackage(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := portable.Smoke(context.Background(), result, 2*time.Second); err != nil {
+	report, err := portable.SmokeDetailed(context.Background(), result, 2*time.Second)
+	if err != nil {
 		t.Fatalf("Smoke() error = %v", err)
+	}
+	if !report.PackageOpened || !report.VMCompatible || report.UIOpened || report.PackageSHA256 == "" {
+		t.Fatalf("SmokeDetailed() report = %#v", report)
 	}
 
 	failing := newFixture(t, "Failing", false)
@@ -108,11 +112,82 @@ func TestSmokeStartsApplicationAndRejectsFailureOrTamperedPackage(t *testing.T) 
 	assertPortableKind(t, err, portable.ErrorIntegrity)
 }
 
+func TestSmokeRejectsIncompatibleRuntimeTimeoutCrashAndInvalidProtocol(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("portable shell runtime fixture is Unix-only")
+	}
+	tests := []struct {
+		name    string
+		body    func(string) string
+		timeout time.Duration
+		kind    portable.ErrorKind
+	}{
+		{
+			name: "incompatible",
+			body: func(hash string) string {
+				return smokeScript(hash, true, false, false)
+			},
+			timeout: time.Second,
+			kind:    portable.ErrorSmokeIncompatible,
+		},
+		{
+			name: "timeout",
+			body: func(string) string {
+				return "#!/bin/sh\nwhile :; do :; done\n"
+			},
+			timeout: 30 * time.Millisecond,
+			kind:    portable.ErrorSmokeTimeout,
+		},
+		{
+			name: "crash",
+			body: func(string) string {
+				return "#!/bin/sh\nkill -SEGV $$\n"
+			},
+			timeout: time.Second,
+			kind:    portable.ErrorSmokeCrash,
+		},
+		{
+			name: "invalid protocol",
+			body: func(string) string {
+				return "#!/bin/sh\nprintf '%s\\n' '{\"protocol\":\"wrong\"}'\n"
+			},
+			timeout: time.Second,
+			kind:    portable.ErrorSmokeProtocol,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixtureWithScript(t, "Smoke "+test.name, test.body)
+			result, err := portable.Build(context.Background(), fixture.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := portable.SmokeDetailed(context.Background(), result, test.timeout)
+			assertPortableKind(t, err, test.kind)
+			if report.ExitCode == 0 && test.kind == portable.ErrorSmokeCrash {
+				t.Fatalf("crash report = %#v", report)
+			}
+		})
+	}
+}
+
 type fixture struct {
 	request portable.Request
 }
 
 func newFixture(t *testing.T, name string, successfulRuntime bool) fixture {
+	t.Helper()
+	if !successfulRuntime {
+		return newFixtureWithScript(t, name, func(string) string {
+			return "#!/bin/sh\nprintf '%s\\n' 'runtime rejected package' >&2\nexit 7\n"
+		})
+	}
+	return newFixtureWithScript(t, name, func(hash string) string {
+		return smokeScript(hash, true, true, false)
+	})
+}
+
+func newFixtureWithScript(t *testing.T, name string, makeScript func(string) string) fixture {
 	t.Helper()
 	root := t.TempDir()
 	packagePath := makePackage(t, root)
@@ -121,10 +196,7 @@ func newFixture(t *testing.T, name string, successfulRuntime bool) fixture {
 		t.Fatal(err)
 	}
 	runtimePath := filepath.Join(root, "fluxa-runtime")
-	script := "#!/bin/sh\nexit 7\n"
-	if successfulRuntime {
-		script = "#!/bin/sh\nif [ \"$1\" = \"--fluxa-package-self-test\" ] && [ -f \"$0.flxpkg\" ]; then exit 0; fi\nexit 9\n"
-	}
+	script := makeScript(packageInfo.SHA256)
 	if err := os.WriteFile(runtimePath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +223,22 @@ func newFixture(t *testing.T, name string, successfulRuntime bool) fixture {
 		},
 		SourceExposed: true,
 	}}
+}
+
+func smokeScript(hash string, opened, compatible, uiOpened bool) string {
+	response := map[string]any{
+		"protocol":       "fluxa-package-self-test-v1",
+		"package_sha256": hash,
+		"package_opened": opened,
+		"vm_compatible":  compatible,
+		"ui_opened":      uiOpened,
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		panic(err)
+	}
+	return "#!/bin/sh\nif [ \"$1\" = \"--fluxa-package-self-test\" ] && [ -f \"$0.flxpkg\" ]; then\nprintf '%s\\n' '" +
+		string(data) + "'\nexit 0\nfi\nexit 9\n"
 }
 
 func makePackage(t *testing.T, root string) string {

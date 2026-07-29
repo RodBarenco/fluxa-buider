@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -226,6 +227,22 @@ terminal = false
 	}
 	if len(entries) != 0 {
 		t.Fatalf("workspace was not cleaned: %v", entries)
+	}
+
+	if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	dependencies.smokePortable = func(context.Context, portable.Result, time.Duration) error {
+		return errors.New("runtime rejected package")
+	}
+	code = runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
+	if code != 1 || !strings.Contains(stderr.String(), "smoke test failed") {
+		t.Fatalf("failed smoke code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "dist")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed smoke published dist: %v", err)
 	}
 }
 

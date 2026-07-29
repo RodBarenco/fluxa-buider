@@ -19,6 +19,14 @@ const (
 	ErrorIO ErrorKind = "io"
 	// ErrorSmoke means the staged runtime rejected its package.
 	ErrorSmoke ErrorKind = "smoke"
+	// ErrorSmokeTimeout means the staged runtime did not finish its self-test in time.
+	ErrorSmokeTimeout ErrorKind = "smoke_timeout"
+	// ErrorSmokeCrash means the staged runtime terminated abnormally.
+	ErrorSmokeCrash ErrorKind = "smoke_crash"
+	// ErrorSmokeProtocol means the runtime returned an invalid self-test response.
+	ErrorSmokeProtocol ErrorKind = "smoke_protocol"
+	// ErrorSmokeIncompatible means the runtime reported an incompatible package or VM.
+	ErrorSmokeIncompatible ErrorKind = "smoke_incompatible"
 )
 
 // Error preserves operation and path context.
