@@ -1,6 +1,7 @@
 package flxpkg
 
 import (
+	"bufio"
 	"compress/zlib"
 	"crypto/sha256"
 	"encoding/binary"
@@ -47,56 +48,62 @@ func Verify(path string) (Info, error) {
 	if !stat.Mode().IsRegular() {
 		return Info{}, packageError(ErrorInvalid, "validate", path, errors.New("package is not a regular file"))
 	}
-	if stat.Size() < int64(headerSize) {
-		return Info{}, packageError(ErrorInvalid, "read header", path, errors.New("package is truncated"))
+	info, err := verifyReader(file, stat.Size(), path)
+	if err != nil {
+		return Info{}, err
 	}
-	if stat.Size() < 0 || uint64(stat.Size()) > maxPackageSize { // #nosec G115 -- negativity checked first.
-		return Info{}, packageError(ErrorLimit, "validate size", path, errors.New("package exceeds size limit"))
-	}
+	return info, nil
+}
 
+func verifyReader(reader io.ReaderAt, size int64, label string) (Info, error) {
+	if size < int64(headerSize) {
+		return Info{}, packageError(ErrorInvalid, "read header", label, errors.New("package is truncated"))
+	}
+	if size < 0 || uint64(size) > maxPackageSize { // #nosec G115 -- negativity checked first.
+		return Info{}, packageError(ErrorLimit, "validate size", label, errors.New("package exceeds size limit"))
+	}
 	var header packageHeader
-	if err := binary.Read(io.NewSectionReader(file, 0, int64(headerSize)), binary.LittleEndian, &header); err != nil {
-		return Info{}, packageError(ErrorInvalid, "read header", path, err)
+	if err := binary.Read(io.NewSectionReader(reader, 0, int64(headerSize)), binary.LittleEndian, &header); err != nil {
+		return Info{}, packageError(ErrorInvalid, "read header", label, err)
 	}
 	if header.Magic != packageMagic {
-		return Info{}, packageError(ErrorInvalid, "validate magic", path, errors.New("not a Fluxa package"))
+		return Info{}, packageError(ErrorInvalid, "validate magic", label, errors.New("not a Fluxa package"))
 	}
 	if header.FormatVersion != formatVersion {
-		return Info{}, packageError(ErrorInvalid, "validate version", path, fmt.Errorf("unsupported package version %d", header.FormatVersion))
+		return Info{}, packageError(ErrorInvalid, "validate version", label, fmt.Errorf("unsupported package version %d", header.FormatVersion))
 	}
 	if header.Flags != 0 || header.Signature != [64]byte{} {
-		return Info{}, packageError(ErrorInvalid, "validate flags", path, errors.New("unsupported flags or signature"))
+		return Info{}, packageError(ErrorInvalid, "validate flags", label, errors.New("unsupported flags or signature"))
 	}
-	fileSize := uint64(stat.Size()) // #nosec G115 -- nonnegative and bounded above.
+	fileSize := uint64(size) // #nosec G115 -- nonnegative and bounded above.
 	if err := validateLayout(header, fileSize); err != nil {
 		return Info{}, err
 	}
 
-	actualBodyHash, err := hashSection(file, header.ManifestOffset, header.ManifestSize+header.TableSize+header.PayloadSize)
-	if err != nil {
-		return Info{}, packageError(ErrorIO, "hash package body", path, err)
-	}
-	if actualBodyHash != header.PackageHash {
-		return Info{}, packageError(ErrorIntegrity, "verify package hash", path, errors.New("global SHA-256 mismatch"))
-	}
-
 	// Package size is bounded well below MaxInt64.
-	manifestValue, err := manifest.Decode(io.NewSectionReader(file, int64(header.ManifestOffset), int64(header.ManifestSize))) // #nosec G115
+	manifestValue, err := manifest.Decode(io.NewSectionReader(reader, int64(header.ManifestOffset), int64(header.ManifestSize))) // #nosec G115
 	if err != nil {
-		return Info{}, packageError(ErrorInvalid, "decode manifest", path, err)
+		return Info{}, packageError(ErrorInvalid, "decode manifest", label, err)
 	}
-	entries, err := readTable(file, header, manifestValue)
+	entries, err := readTable(reader, header, manifestValue)
 	if err != nil {
 		return Info{}, err
 	}
 	for _, entry := range entries {
-		if err := verifyPayload(file, entry); err != nil {
+		if err := verifyPayload(reader, entry); err != nil {
 			return Info{}, err
 		}
 	}
-	fullHash, err := hashSection(file, 0, fileSize)
+	actualBodyHash, err := hashSection(reader, header.ManifestOffset, header.ManifestSize+header.TableSize+header.PayloadSize)
 	if err != nil {
-		return Info{}, packageError(ErrorIO, "hash package file", path, err)
+		return Info{}, packageError(ErrorIO, "hash package body", label, err)
+	}
+	if actualBodyHash != header.PackageHash {
+		return Info{}, packageError(ErrorIntegrity, "verify package hash", label, errors.New("global SHA-256 mismatch"))
+	}
+	fullHash, err := hashSection(reader, 0, fileSize)
+	if err != nil {
+		return Info{}, packageError(ErrorIO, "hash package file", label, err)
 	}
 	infoEntries := make([]EntryInfo, len(entries))
 	for index, entry := range entries {
@@ -118,7 +125,7 @@ func Verify(path string) (Info, error) {
 		FormatVersion: header.FormatVersion,
 		Manifest:      manifestValue,
 		Entries:       infoEntries,
-		Size:          stat.Size(),
+		Size:          size,
 		SHA256:        hex.EncodeToString(fullHash[:]),
 	}, nil
 }
@@ -142,7 +149,7 @@ func validateLayout(header packageHeader, fileSize uint64) error {
 	return nil
 }
 
-func readTable(file *os.File, header packageHeader, value manifest.Manifest) ([]tableEntry, error) {
+func readTable(file io.ReaderAt, header packageHeader, value manifest.Manifest) ([]tableEntry, error) {
 	// Header layout was bounded by validateLayout and maxPackageSize.
 	reader := io.NewSectionReader(file, int64(header.TableOffset), int64(header.TableSize)) // #nosec G115
 	var count uint32
@@ -154,6 +161,7 @@ func readTable(file *os.File, header packageHeader, value manifest.Manifest) ([]
 	}
 	entries := make([]tableEntry, 0, count)
 	nextOffset := header.PayloadOffset
+	totalOriginal := uint64(0)
 	previousPath := ""
 	for index := uint32(0); index < count; index++ {
 		var pathLength uint16
@@ -212,11 +220,18 @@ func readTable(file *os.File, header packageHeader, value manifest.Manifest) ([]
 		if entry.Compression == compressionNone && entry.StoredSize != entry.OriginalSize {
 			return nil, packageError(ErrorInvalid, "validate uncompressed size", entry.Path, errors.New("stored and original sizes differ"))
 		}
+		if totalOriginal > maxPayloadSize-entry.OriginalSize {
+			return nil, packageError(ErrorLimit, "validate expanded payload", entry.Path, errors.New("total original size exceeds package limit"))
+		}
+		totalOriginal += entry.OriginalSize
 		entries = append(entries, entry)
 		previousPath = entry.Path
 	}
 	if nextOffset != header.PayloadOffset+header.PayloadSize {
 		return nil, packageError(ErrorInvalid, "validate payload coverage", "", errors.New("table entries do not cover payload"))
+	}
+	if totalOriginal > header.PayloadSize*200+16*1024*1024 {
+		return nil, packageError(ErrorLimit, "validate expanded payload", "", errors.New("aggregate compression expansion exceeds safety limit"))
 	}
 	current, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil || current < 0 || uint64(current) != header.TableSize { // #nosec G115 -- negativity checked first.
@@ -225,15 +240,24 @@ func readTable(file *os.File, header packageHeader, value manifest.Manifest) ([]
 	return entries, nil
 }
 
-func verifyPayload(file *os.File, entry tableEntry) error {
+func verifyPayload(file io.ReaderAt, entry tableEntry) error {
 	// Entry bounds are below maxPackageSize and therefore below MaxInt64.
 	section := io.NewSectionReader(file, int64(entry.Offset), int64(entry.StoredSize)) // #nosec G115
 	var reader io.Reader = section
 	var compressed io.Closer
+	var compressedInput *bufio.Reader
 	if entry.Compression == compressionZlib {
-		zlibReader, err := zlib.NewReader(section)
+		if entry.StoredSize == 0 || entry.OriginalSize > entry.StoredSize*200+4*1024*1024 {
+			return packageError(ErrorLimit, "validate compression ratio", entry.Path, errors.New("declared expansion exceeds safety limit"))
+		}
+		buffered := bufio.NewReader(section)
+		compressedInput = buffered
+		zlibReader, err := zlib.NewReader(buffered)
 		if err != nil {
 			return packageError(ErrorInvalid, "open compressed payload", entry.Path, err)
+		}
+		if singleStream, ok := zlibReader.(interface{ Multistream(bool) }); ok {
+			singleStream.Multistream(false)
 		}
 		compressed = zlibReader
 		reader = zlibReader
@@ -247,6 +271,13 @@ func verifyPayload(file *os.File, entry tableEntry) error {
 	if copyErr != nil || closeErr != nil {
 		return packageError(ErrorInvalid, "read payload", entry.Path, errors.Join(copyErr, closeErr))
 	}
+	if compressedInput != nil {
+		if _, err := compressedInput.Peek(1); err == nil {
+			return packageError(ErrorInvalid, "validate compressed payload", entry.Path, errors.New("compressed entry contains trailing bytes or multiple streams"))
+		} else if !errors.Is(err, io.EOF) {
+			return packageError(ErrorInvalid, "validate compressed payload", entry.Path, err)
+		}
+	}
 	if written < 0 || uint64(written) != entry.OriginalSize { // #nosec G115 -- negativity checked first.
 		return packageError(ErrorIntegrity, "verify payload size", entry.Path, fmt.Errorf("got %d bytes, expected %d", written, entry.OriginalSize))
 	}
@@ -258,7 +289,7 @@ func verifyPayload(file *os.File, entry tableEntry) error {
 	return nil
 }
 
-func hashSection(file *os.File, offset, size uint64) ([32]byte, error) {
+func hashSection(file io.ReaderAt, offset, size uint64) ([32]byte, error) {
 	hash := sha256.New()
 	// All callers pass regions validated below maxPackageSize.
 	if _, err := io.Copy(hash, io.NewSectionReader(file, int64(offset), int64(size))); err != nil { // #nosec G115

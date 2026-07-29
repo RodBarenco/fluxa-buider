@@ -53,6 +53,12 @@ Each entry hashes its original bytes; the header hashes the manifest, table,
 and stored payload. Optional zlib compression is per entry. Package publication
 occurs only after the temporary file is synced, reopened, and fully verified.
 
+The package reader treats every input as hostile. It validates bounded structure
+before streaming payload data, limits zlib expansion, rejects trailing or
+concatenated compressed streams, and only reports success after entry and global
+integrity checks. The parser works over `io.ReaderAt`, so file verification and
+in-memory fuzzing share exactly the same implementation.
+
 ## External processes
 
 All process execution is centralized in `internal/executor`. Callers pass an

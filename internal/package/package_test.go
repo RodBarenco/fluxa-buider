@@ -152,6 +152,15 @@ func TestVerifyRejectsCorruption(t *testing.T) {
 		{"invalid manifest offset", func(data []byte) {
 			binary.LittleEndian.PutUint64(data[16:24], headerSize+1)
 		}},
+		{"invalid magic", func(data []byte) {
+			data[0] ^= 0xff
+		}},
+		{"unknown version", func(data []byte) {
+			binary.LittleEndian.PutUint32(data[8:12], formatVersion+1)
+		}},
+		{"unknown flags", func(data []byte) {
+			binary.LittleEndian.PutUint32(data[12:16], 1)
+		}},
 		{"invalid entry offset", func(data []byte) {
 			offsetPosition := int(header.TableOffset) + 12 // #nosec G115 -- valid small test fixture.
 			binary.LittleEndian.PutUint64(data[offsetPosition:offsetPosition+8], header.PayloadOffset+1)
@@ -165,6 +174,11 @@ func TestVerifyRejectsCorruption(t *testing.T) {
 		{"invalid entry hash", func(data []byte) {
 			position := int(header.TableOffset) + 36 // #nosec G115 -- valid small test fixture.
 			data[position] ^= 0xff
+			refreshBodyHash(t, data)
+		}},
+		{"unknown compression", func(data []byte) {
+			position := int(header.TableOffset) + 7 // #nosec G115 -- valid small test fixture.
+			data[position] = 0xff
 			refreshBodyHash(t, data)
 		}},
 		{"corrupt manifest", func(data []byte) {
@@ -206,6 +220,62 @@ func TestVerifyRejectsCorruption(t *testing.T) {
 			assertPackageError(t, err)
 		})
 	}
+}
+
+func TestVerifyRejectsTrailingPackageAndCompressedEntryBytes(t *testing.T) {
+	root := t.TempDir()
+	validPath := createTwoFilePackage(t, root)
+	valid, err := os.ReadFile(validPath) // #nosec G304 -- test-controlled path.
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailingPath := filepath.Join(root, "trailing.flxpkg")
+	if err := os.WriteFile(trailingPath, append(valid, 0), 0o600); err != nil { // #nosec G703 -- test-controlled temporary path.
+		t.Fatal(err)
+	}
+	_, err = Verify(trailingPath)
+	assertPackageError(t, err)
+
+	source := writePackageSource(t, root, "compressed.txt", []byte(strings.Repeat("compress me", 100)))
+	file := manifestFile("resources/compressed.txt", "compressed.txt", "asset", source)
+	compressedPath := filepath.Join(root, "compressed.flxpkg")
+	if _, err := Write(context.Background(), Request{
+		OutputPath: compressedPath,
+		Manifest:   baseManifest([]manifest.File{file}),
+		Sources:    map[string]string{file.Path: source},
+		Compress:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(compressedPath) // #nosec G304 -- test-controlled path.
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header packageHeader
+	if err := binary.Read(bytes.NewReader(data[:headerSize]), binary.LittleEndian, &header); err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, 0)
+	binary.LittleEndian.PutUint64(data[56:64], header.PayloadSize+1)
+	storedPosition := int(header.TableOffset) + 20 // #nosec G115 -- valid small test fixture.
+	stored := binary.LittleEndian.Uint64(data[storedPosition : storedPosition+8])
+	binary.LittleEndian.PutUint64(data[storedPosition:storedPosition+8], stored+1)
+	refreshBodyHash(t, data)
+	corruptPath := filepath.Join(root, "compressed-trailing.flxpkg")
+	if err := os.WriteFile(corruptPath, data, 0o600); err != nil { // #nosec G703 -- test-controlled temporary path.
+		t.Fatal(err)
+	}
+	_, err = Verify(corruptPath)
+	assertPackageOperation(t, err, "validate compressed payload")
+}
+
+func TestVerifyRejectsCompressionBombDeclaration(t *testing.T) {
+	entry := tableEntry{
+		Path: "resources/bomb.bin", Compression: compressionZlib,
+		StoredSize: 1, OriginalSize: 5 * 1024 * 1024,
+	}
+	err := verifyPayload(bytes.NewReader([]byte{0}), entry)
+	assertPackageOperation(t, err, "validate compression ratio")
 }
 
 func TestWriteRejectsChangedSourceDuplicateDestinationAndCancellation(t *testing.T) {
@@ -329,5 +399,14 @@ func assertPackageError(t *testing.T, err error) {
 	var packageErr *Error
 	if !errors.As(err, &packageErr) {
 		t.Fatalf("error type = %T, want *flxpkg.Error: %v", err, err)
+	}
+}
+
+func assertPackageOperation(t *testing.T, err error, operation string) {
+	t.Helper()
+	assertPackageError(t, err)
+	var packageErr *Error
+	if !errors.As(err, &packageErr) || packageErr.Operation != operation {
+		t.Fatalf("operation = %q, want %q: %v", packageErr.Operation, operation, err)
 	}
 }
