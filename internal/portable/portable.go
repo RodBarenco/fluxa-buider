@@ -37,6 +37,7 @@ type Request struct {
 type Result struct {
 	Directory   string
 	Name        string
+	TargetOS    string
 	Executable  string
 	Package     string
 	BuildInfo   string
@@ -150,7 +151,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	}
 	complete = true
 	return Result{
-		Directory: directory, Name: name, Executable: executablePath,
+		Directory: directory, Name: name, TargetOS: request.TargetOS, Executable: executablePath,
 		Package: packagePath, BuildInfo: infoPath,
 		PackageHash: packageHash, RuntimeHash: runtimeHash,
 	}, nil

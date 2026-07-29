@@ -187,6 +187,7 @@ terminal = false
 		smokePortable: func(context.Context, portable.Result, time.Duration) error {
 			return nil
 		},
+		archivePortable: portable.Archive,
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
@@ -214,11 +215,26 @@ terminal = false
 	if !strings.Contains(stdout.String(), "Runtime selected:") {
 		t.Fatalf("Run(build) stdout = %q, want runtime summary", stdout.String())
 	}
+	archiveExtension := ".tar.gz"
+	if targetOS == "windows" {
+		archiveExtension = ".zip"
+	}
+	if !strings.Contains(stdout.String(), "Distribution archive:") ||
+		!strings.Contains(stdout.String(), "Archive SHA-256:") {
+		t.Fatalf("Run(build) stdout = %q, want archive summary", stdout.String())
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("Run(build) stderr = %q, want empty", stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(root, "dist", targetDirectoryName(targetOS, runtime.GOARCH), "cli-test")); err != nil {
+	targetOutput := filepath.Join(root, "dist", targetDirectoryName(targetOS, runtime.GOARCH))
+	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test")); err != nil {
 		t.Fatalf("portable output missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension)); err != nil {
+		t.Fatalf("distribution archive missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension+".sha256")); err != nil {
+		t.Fatalf("archive checksum missing: %v", err)
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
 	entries, err := os.ReadDir(workDir)

@@ -104,32 +104,34 @@ type buildOptions struct {
 }
 
 type buildDependencies struct {
-	resolve        func(toolchain.ResolveOptions) (toolchain.Candidate, error)
-	probe          func(context.Context, string, time.Duration) (toolchain.Identity, error)
-	newWorkspace   func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
-	collect        func(context.Context, *project.Config) (collector.Result, error)
-	compile        func(context.Context, compiler.Request) (compiler.Result, error)
-	newManifest    func(context.Context, manifest.Input) (manifest.Manifest, error)
-	writeManifest  func(string, manifest.Manifest) error
-	writePackage   func(context.Context, flxpkg.Request) (flxpkg.Result, error)
-	resolveRuntime func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
-	buildPortable  func(context.Context, portable.Request) (portable.Result, error)
-	smokePortable  func(context.Context, portable.Result, time.Duration) error
+	resolve         func(toolchain.ResolveOptions) (toolchain.Candidate, error)
+	probe           func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	newWorkspace    func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
+	collect         func(context.Context, *project.Config) (collector.Result, error)
+	compile         func(context.Context, compiler.Request) (compiler.Result, error)
+	newManifest     func(context.Context, manifest.Input) (manifest.Manifest, error)
+	writeManifest   func(string, manifest.Manifest) error
+	writePackage    func(context.Context, flxpkg.Request) (flxpkg.Result, error)
+	resolveRuntime  func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
+	buildPortable   func(context.Context, portable.Request) (portable.Result, error)
+	smokePortable   func(context.Context, portable.Result, time.Duration) error
+	archivePortable func(context.Context, portable.Result, string) (portable.ArchiveResult, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
 	return buildDependencies{
-		resolve:        toolchain.Resolve,
-		probe:          toolchain.Probe,
-		newWorkspace:   buildpkg.NewWorkspace,
-		collect:        collector.CollectProject,
-		compile:        compiler.Compile,
-		newManifest:    manifest.New,
-		writeManifest:  manifest.WriteFile,
-		writePackage:   flxpkg.Write,
-		resolveRuntime: runtimepkg.Resolve,
-		buildPortable:  portable.Build,
-		smokePortable:  portable.Smoke,
+		resolve:         toolchain.Resolve,
+		probe:           toolchain.Probe,
+		newWorkspace:    buildpkg.NewWorkspace,
+		collect:         collector.CollectProject,
+		compile:         compiler.Compile,
+		newManifest:     manifest.New,
+		writeManifest:   manifest.WriteFile,
+		writePackage:    flxpkg.Write,
+		resolveRuntime:  runtimepkg.Resolve,
+		buildPortable:   portable.Build,
+		smokePortable:   portable.Smoke,
+		archivePortable: portable.Archive,
 	}
 }
 
@@ -258,8 +260,15 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to select compatible Fluxa runtime\ncaused by: %v\n", err)
 		return 1
 	}
+	targetName := targetDirectoryName(packageManifest.Target.OS, packageManifest.Target.Arch)
+	targetStage := filepath.Join(workspace.OutputDir, targetName)
+	if err := os.Mkdir(targetStage, 0o700); err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to create target staging directory\ncaused by: %v\n", err)
+		return 1
+	}
 	portableResult, err := dependencies.buildPortable(context.Background(), portable.Request{
-		OutputRoot:    workspace.OutputDir,
+		OutputRoot:    targetStage,
 		ProjectName:   cfg.Project.Name,
 		ProjectID:     cfg.Project.ID,
 		Version:       cfg.Project.Version,
@@ -291,16 +300,19 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: portable application smoke test failed\ncaused by: %v\n", err)
 		return 1
 	}
-	publishDestination := filepath.Join(
-		cfg.OutputPath,
-		targetDirectoryName(packageManifest.Target.OS, packageManifest.Target.Arch),
-		portableResult.Name,
-	)
-	if err := workspace.Publish(context.Background(), portableResult.Directory, publishDestination); err != nil {
+	archiveResult, err := dependencies.archivePortable(context.Background(), portableResult, packageManifest.Target.OS)
+	if err != nil {
 		_ = workspace.Cleanup()
-		_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application\ncaused by: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "error: failed to create distribution archive\ncaused by: %v\n", err)
 		return 1
 	}
+	publishTarget := filepath.Join(cfg.OutputPath, targetName)
+	if err := workspace.Publish(context.Background(), targetStage, publishTarget); err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application and archive\ncaused by: %v\n", err)
+		return 1
+	}
+	publishDestination := filepath.Join(publishTarget, portableResult.Name)
 
 	version := identity.Version
 	if version == "" {
@@ -366,6 +378,19 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	); err != nil {
 		_ = workspace.Cleanup()
 		writeString(stderr, "error: failed to write portable output\n")
+		return 1
+	}
+	if _, err = fmt.Fprintf(
+		stdout,
+		"Distribution archive: %s\nArchive format: %s\nArchive bytes: %d\nArchive SHA-256: %s\nChecksum: %s\n",
+		filepath.Join(publishTarget, filepath.Base(archiveResult.Path)),
+		archiveResult.Format,
+		archiveResult.Size,
+		archiveResult.SHA256,
+		filepath.Join(publishTarget, filepath.Base(archiveResult.ChecksumPath)),
+	); err != nil {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: failed to write archive output\n")
 		return 1
 	}
 	if _, err = fmt.Fprintf(
