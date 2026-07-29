@@ -16,6 +16,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
+	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
@@ -112,6 +113,8 @@ type buildDependencies struct {
 	writeManifest  func(string, manifest.Manifest) error
 	writePackage   func(context.Context, flxpkg.Request) (flxpkg.Result, error)
 	resolveRuntime func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
+	buildPortable  func(context.Context, portable.Request) (portable.Result, error)
+	smokePortable  func(context.Context, portable.Result, time.Duration) error
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -125,6 +128,8 @@ func defaultBuildDependencies() buildDependencies {
 		writeManifest:  manifest.WriteFile,
 		writePackage:   flxpkg.Write,
 		resolveRuntime: runtimepkg.Resolve,
+		buildPortable:  portable.Build,
+		smokePortable:  portable.Smoke,
 	}
 }
 
@@ -141,6 +146,10 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to load project\ncaused by: %v\n", err)
 		return 1
 	}
+	if cfg.Package.Format != "portable" {
+		_, _ = fmt.Fprintf(stderr, "error: package format %q is not implemented yet; use portable\n", cfg.Package.Format)
+		return 1
+	}
 
 	candidate, err := dependencies.resolve(toolchain.ResolveOptions{
 		ExplicitPath: options.fluxaPath,
@@ -153,7 +162,6 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to locate Fluxa toolchain\ncaused by: %v\n", err)
 		return 1
 	}
-
 	identity, err := dependencies.probe(context.Background(), candidate.Path, 5*time.Second)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "error: failed to identify Fluxa toolchain\ncaused by: %v\n", err)
@@ -250,6 +258,49 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to select compatible Fluxa runtime\ncaused by: %v\n", err)
 		return 1
 	}
+	portableResult, err := dependencies.buildPortable(context.Background(), portable.Request{
+		OutputRoot:    workspace.OutputDir,
+		ProjectName:   cfg.Project.Name,
+		ProjectID:     cfg.Project.ID,
+		Version:       cfg.Project.Version,
+		TargetOS:      packageManifest.Target.OS,
+		TargetArch:    packageManifest.Target.Arch,
+		Terminal:      packageManifest.Target.Terminal,
+		PackagePath:   packageResult.Path,
+		PackageSHA256: packageResult.SHA256,
+		Runtime:       selectedRuntime,
+		SourceExposed: packageManifest.Build.SourceExposed,
+	})
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to assemble portable application\ncaused by: %v\n", err)
+		return 1
+	}
+	if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(
+			stderr,
+			"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
+			packageManifest.Target.OS,
+			packageManifest.Target.Arch,
+		)
+		return 1
+	}
+	if err := dependencies.smokePortable(context.Background(), portableResult, 10*time.Second); err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: portable application smoke test failed\ncaused by: %v\n", err)
+		return 1
+	}
+	publishDestination := filepath.Join(
+		cfg.OutputPath,
+		targetDirectoryName(packageManifest.Target.OS, packageManifest.Target.Arch),
+		portableResult.Name,
+	)
+	if err := workspace.Publish(context.Background(), portableResult.Directory, publishDestination); err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application\ncaused by: %v\n", err)
+		return 1
+	}
 
 	version := identity.Version
 	if version == "" {
@@ -308,6 +359,17 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	}
 	if _, err = fmt.Fprintf(
 		stdout,
+		"Portable application verified\nOutput: %s\nExecutable: %s\nPackage: %s\n",
+		publishDestination,
+		filepath.Base(portableResult.Executable),
+		filepath.Base(portableResult.Package),
+	); err != nil {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: failed to write portable output\n")
+		return 1
+	}
+	if _, err = fmt.Fprintf(
+		stdout,
 		"Runtime selected: %s\nRuntime SHA-256: %s\n",
 		selectedRuntime.BinaryPath,
 		selectedRuntime.Metadata.BinarySHA256,
@@ -326,8 +388,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after verified runtime selection; portable output is not implemented yet\n")
-	return 1
+	return 0
 }
 
 func packageSources(compiledDir string, collection collector.Result, compilation compiler.Result) map[string]string {
@@ -550,6 +611,21 @@ func resolveManifestTarget(configured string) (string, string, error) {
 		return "", "", fmt.Errorf("unsupported target architecture %q", arch)
 	}
 	return osName, arch, nil
+}
+
+func hostCanExecuteTarget(osName, arch string) bool {
+	hostOS := runtime.GOOS
+	if hostOS == "darwin" {
+		hostOS = "macos"
+	}
+	return osName == hostOS && arch == runtime.GOARCH
+}
+
+func targetDirectoryName(osName, arch string) string {
+	if arch == "amd64" {
+		arch = "x64"
+	}
+	return osName + "-" + arch
 }
 
 func parseBuildOptions(args []string) (buildOptions, error) {

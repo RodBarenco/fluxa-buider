@@ -102,6 +102,15 @@ Metadata additionally binds the binary hash, toolchain hash, package format,
 program representation, terminal mode, and raw `fluxa.libs` hash. Resolution
 rehashes every candidate and fails closed if no single exact match exists.
 
+## Portable output
+
+Portable output contains a renamed runtime, a same-basename `.flxpkg`, and
+`build-info.json`. Assembly and hash verification happen inside the
+transactional workspace. A host runtime must then pass the non-interactive
+`--fluxa-package-self-test` contract before the directory is atomically
+published under `dist/<target>/`. Cross-target output remains unpublished until
+an equivalent trusted smoke mechanism exists.
+
 ## Terminal mode
 
 Project configuration will include an explicit terminal preference, planned as

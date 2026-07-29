@@ -101,6 +101,11 @@ fluxa-builder runtime list
 fluxa-builder runtime add ./fluxa-runtime --metadata ./runtime.json
 ```
 
+With a compatible registered runtime, `fluxa-builder build . --include-source`
+can now publish the first portable directory. The source option remains
+development-only, and the runtime must support FLXPKG v1 plus the
+`--fluxa-package-self-test` contract.
+
 ## Versioning
 
 Fluxa Builder follows Semantic Versioning. While the version is below `1.0.0`,

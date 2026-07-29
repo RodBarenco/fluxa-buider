@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
+	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
@@ -114,7 +116,7 @@ func TestRunRejectsVersionArguments(t *testing.T) {
 	}
 }
 
-func TestRunBuildLoadsProjectThenStops(t *testing.T) {
+func TestRunBuildPublishesPortableProject(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -132,6 +134,19 @@ terminal = false
 	}
 	if err := os.WriteFile(filepath.Join(root, "main.flx"), []byte(`print("ok")`), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(root, "runtime-fixture")
+	runtimeBytes := []byte("runtime fixture")
+	if err := os.WriteFile(runtimePath, runtimeBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(runtimePath, 0o700); err != nil { // #nosec G302 -- executable runtime fixture.
+		t.Fatal(err)
+	}
+	runtimeHash := sha256.Sum256(runtimeBytes)
+	targetOS := runtime.GOOS
+	if targetOS == "darwin" {
+		targetOS = "macos"
 	}
 
 	var stdout bytes.Buffer
@@ -160,17 +175,22 @@ terminal = false
 		writePackage:  flxpkg.Write,
 		resolveRuntime: func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error) {
 			return runtimepkg.Runtime{
-				BinaryPath: "/registry/unreported/linux-x64/fluxa-runtime",
+				BinaryPath: runtimePath,
 				Metadata: runtimepkg.Metadata{
-					BinarySHA256: strings.Repeat("b", 64),
+					OS: targetOS, Arch: runtime.GOARCH, Terminal: false,
+					BinarySHA256: hex.EncodeToString(runtimeHash[:]),
 				},
 			}, nil
+		},
+		buildPortable: portable.Build,
+		smokePortable: func(context.Context, portable.Result, time.Duration) error {
+			return nil
 		},
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
-	if code != 1 {
-		t.Fatalf("Run(build) code = %d, want 1", code)
+	if code != 0 {
+		t.Fatalf("Run(build) code = %d, want 0; stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Project configuration valid") ||
 		!strings.Contains(stdout.String(), "Terminal: false") ||
@@ -193,8 +213,11 @@ terminal = false
 	if !strings.Contains(stdout.String(), "Runtime selected:") {
 		t.Fatalf("Run(build) stdout = %q, want runtime summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "portable output is not implemented yet") {
-		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("Run(build) stderr = %q, want empty", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "dist", targetDirectoryName(targetOS, runtime.GOARCH), "cli-test")); err != nil {
+		t.Fatalf("portable output missing: %v", err)
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
 	entries, err := os.ReadDir(workDir)

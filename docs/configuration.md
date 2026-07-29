@@ -160,3 +160,19 @@ Builder home globally.
 `runtime add` is an explicit local trust decision. It verifies paths,
 permissions, metadata, and hashes, but signed runtime provenance is not yet
 implemented.
+
+## Portable output
+
+For `package.format = "portable"`, a successful host build is published as:
+
+```text
+<build.output>/<os>-<arch>/<application>/
+├── <application>[.exe]
+├── <application>.flxpkg
+└── build-info.json
+```
+
+The runtime must implement `--fluxa-package-self-test` and locate the package
+beside the executable. No output is published if assembly, package verification,
+runtime self-test, or atomic publication fails. Existing output is never
+overwritten.
