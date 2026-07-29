@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
+	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -154,6 +158,14 @@ terminal = false
 		newManifest:   manifest.New,
 		writeManifest: manifest.WriteFile,
 		writePackage:  flxpkg.Write,
+		resolveRuntime: func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error) {
+			return runtimepkg.Runtime{
+				BinaryPath: "/registry/unreported/linux-x64/fluxa-runtime",
+				Metadata: runtimepkg.Metadata{
+					BinarySHA256: strings.Repeat("b", 64),
+				},
+			}, nil
+		},
 	}
 	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
 
@@ -178,7 +190,10 @@ terminal = false
 	if !strings.Contains(stdout.String(), "Fluxa package: com.example.cli-test-1.0.0.flxpkg") {
 		t.Fatalf("Run(build) stdout = %q, want package summary", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "runtime selection is not implemented yet") {
+	if !strings.Contains(stdout.String(), "Runtime selected:") {
+		t.Fatalf("Run(build) stdout = %q, want runtime summary", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "portable output is not implemented yet") {
 		t.Fatalf("Run(build) stderr = %q, want phase boundary", stderr.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
@@ -241,6 +256,55 @@ func TestRunBuildReportsConfigError(t *testing.T) {
 	}
 }
 
+func TestRuntimeAddAndListCommands(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := filepath.Join(root, "registry")
+	binary := filepath.Join(root, "fluxa-runtime")
+	binaryData := []byte("runtime")
+	if err := os.WriteFile(binary, binaryData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(binary, 0o700); err != nil { // #nosec G302 -- executable fixture for runtime registry.
+		t.Fatal(err)
+	}
+	binaryHash := sha256.Sum256(binaryData)
+	emptyHash := sha256.Sum256(nil)
+	metadata := filepath.Join(root, "runtime.json")
+	metadataJSON := fmt.Sprintf(`{
+  "format_version": 1,
+  "fluxa_version": "unreported",
+  "toolchain_sha256": "%s",
+  "package_format_version": 1,
+  "bytecode_version": "",
+  "bytecode_abi": "",
+  "libraries_sha256": "%s",
+  "program_formats": ["fluxa-source"],
+  "os": "linux",
+  "arch": "amd64",
+  "terminal": true,
+  "binary_name": "fluxa-runtime",
+  "binary_sha256": "%s"
+}`, strings.Repeat("a", 64), hex.EncodeToString(emptyHash[:]), hex.EncodeToString(binaryHash[:]))
+	if err := os.WriteFile(metadata, []byte(metadataJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"runtime", "add", binary, "--metadata", metadata, "--registry", registry}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runtime add code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"runtime", "list", "--registry", registry}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "unreported  linux/amd64") {
+		t.Fatalf("runtime list code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestParseBuildOptions(t *testing.T) {
 	t.Parallel()
 
@@ -273,6 +337,11 @@ func TestParseBuildOptions(t *testing.T) {
 			name: "explicit development source fallback",
 			args: []string{"my project", "--include-source"},
 			want: buildOptions{projectPath: "my project", includeSource: true},
+		},
+		{
+			name: "runtime registry",
+			args: []string{"my project", "--runtime-registry", "/tmp/runtimes"},
+			want: buildOptions{projectPath: "my project", runtimeRegistry: "/tmp/runtimes"},
 		},
 		{
 			name:      "missing flag value",

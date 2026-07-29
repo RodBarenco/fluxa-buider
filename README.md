@@ -94,6 +94,13 @@ fluxa-builder inspect application.flxpkg
 fluxa-builder verify application.flxpkg
 ```
 
+Verified runtime binaries are managed locally:
+
+```sh
+fluxa-builder runtime list
+fluxa-builder runtime add ./fluxa-runtime --metadata ./runtime.json
+```
+
 ## Versioning
 
 Fluxa Builder follows Semantic Versioning. While the version is below `1.0.0`,

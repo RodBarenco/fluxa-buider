@@ -342,8 +342,9 @@ func baseManifest(files []manifest.File) manifest.Manifest {
 			Name: "Game", ID: "com.example.game", Version: "1.0.0", Entry: "main.flx", Type: "desktop",
 		},
 		Toolchain: manifest.Toolchain{
-			Protocol:    "runtime-info-v1",
-			FluxaSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Protocol:        "runtime-info-v1",
+			FluxaSHA256:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			LibrariesSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
 		Target: manifest.Target{OS: "linux", Arch: "amd64", Terminal: true},
 		Build: manifest.Build{

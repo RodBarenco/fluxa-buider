@@ -3,6 +3,8 @@ package manifest_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -121,7 +123,12 @@ func TestNewHashesAssetsAndOmitsMachinePaths(t *testing.T) {
 	if err := os.WriteFile(assetPath, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	librariesData := []byte("raylib = true\n")
+	if err := os.WriteFile(filepath.Join(root, "fluxa.libs"), librariesData, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := &project.Config{
+		Root: root,
 		Project: project.Metadata{
 			Name: "Game", ID: "com.example.game", Version: "1.0.0",
 			Entry: "main.flx", Type: "desktop",
@@ -149,6 +156,10 @@ func TestNewHashesAssetsAndOmitsMachinePaths(t *testing.T) {
 	}
 	if len(value.Files) != 2 || value.Files[1].Path != "resources/assets/ação.png" {
 		t.Fatalf("files = %#v", value.Files)
+	}
+	librariesDigest := sha256.Sum256(librariesData)
+	if value.Toolchain.LibrariesSHA256 != hex.EncodeToString(librariesDigest[:]) {
+		t.Fatalf("libraries SHA-256 = %q", value.Toolchain.LibrariesSHA256)
 	}
 	encoded, err := manifest.Encode(value)
 	if err != nil {
@@ -208,8 +219,10 @@ func validManifest() manifest.Manifest {
 		Project: manifest.Project{
 			Name: "Game", ID: "com.example.game", Version: "1.0.0", Entry: "main.flx", Type: "desktop",
 		},
-		Toolchain: manifest.Toolchain{Protocol: "runtime-info-v1", FluxaSHA256: validHash},
-		Target:    manifest.Target{OS: "linux", Arch: "amd64", Terminal: true},
+		Toolchain: manifest.Toolchain{
+			Protocol: "runtime-info-v1", FluxaSHA256: validHash, LibrariesSHA256: validHash,
+		},
+		Target: manifest.Target{OS: "linux", Arch: "amd64", Terminal: true},
 		Build: manifest.Build{
 			Preflight: "not_run", ProgramFormat: "fluxa-source", Debug: true, SourceExposed: true,
 		},

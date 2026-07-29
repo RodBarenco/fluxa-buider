@@ -49,6 +49,7 @@ type Toolchain struct {
 	Protocol        string `json:"protocol"`
 	FluxaVersion    string `json:"fluxa_version,omitempty"`
 	FluxaSHA256     string `json:"fluxa_sha256"`
+	LibrariesSHA256 string `json:"libraries_sha256"`
 	BytecodeVersion string `json:"bytecode_version,omitempty"`
 	BytecodeABI     string `json:"bytecode_abi,omitempty"`
 }
@@ -123,6 +124,10 @@ func New(ctx context.Context, input Input) (Manifest, error) {
 		})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	librariesHash, err := hashOptionalProjectFile(filepath.Join(input.Project.Root, "fluxa.libs"))
+	if err != nil {
+		return Manifest{}, err
+	}
 
 	value := Manifest{
 		FormatVersion: CurrentFormatVersion,
@@ -137,6 +142,7 @@ func New(ctx context.Context, input Input) (Manifest, error) {
 			Protocol:        input.Toolchain.Protocol,
 			FluxaVersion:    input.Toolchain.Version,
 			FluxaSHA256:     input.Toolchain.SHA256,
+			LibrariesSHA256: librariesHash,
 			BytecodeVersion: input.Compilation.BytecodeVersion,
 			BytecodeABI:     input.Compilation.BytecodeABI,
 		},
@@ -175,6 +181,7 @@ func Validate(value Manifest) error {
 		{"project.type", value.Project.Type},
 		{"toolchain.protocol", value.Toolchain.Protocol},
 		{"toolchain.fluxa_sha256", value.Toolchain.FluxaSHA256},
+		{"toolchain.libraries_sha256", value.Toolchain.LibrariesSHA256},
 		{"target.os", value.Target.OS},
 		{"target.arch", value.Target.Arch},
 		{"build.preflight", value.Build.Preflight},
@@ -190,6 +197,9 @@ func Validate(value Manifest) error {
 	}
 	if !validHash(value.Toolchain.FluxaSHA256) {
 		return manifestError(ErrorInvalid, "validate", "toolchain.fluxa_sha256", errors.New("must be 64 lowercase hexadecimal characters"))
+	}
+	if !validHash(value.Toolchain.LibrariesSHA256) {
+		return manifestError(ErrorInvalid, "validate", "toolchain.libraries_sha256", errors.New("must be 64 lowercase hexadecimal characters"))
 	}
 	if len(value.Files) == 0 {
 		return manifestError(ErrorInvalid, "validate", "files", errors.New("must contain at least one file"))
@@ -250,6 +260,37 @@ func hashSelectedFile(entry collector.Entry) (string, error) {
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", manifestError(ErrorIO, "hash asset", entry.Path, err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func hashOptionalProjectFile(path string) (string, error) {
+	linkInfo, err := os.Lstat(path)
+	if err == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
+		return "", manifestError(ErrorInvalid, "validate libraries configuration", path, errors.New("fluxa.libs must not be a symlink"))
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", manifestError(ErrorIO, "inspect libraries configuration", path, err)
+	}
+	file, err := os.Open(path) // #nosec G304 -- fixed fluxa.libs name under validated project root.
+	if errors.Is(err, os.ErrNotExist) {
+		empty := sha256.Sum256(nil)
+		return hex.EncodeToString(empty[:]), nil
+	}
+	if err != nil {
+		return "", manifestError(ErrorIO, "open libraries configuration", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return "", manifestError(ErrorIO, "inspect libraries configuration", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", manifestError(ErrorInvalid, "validate libraries configuration", path, errors.New("fluxa.libs must be a regular file"))
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", manifestError(ErrorIO, "hash libraries configuration", path, err)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

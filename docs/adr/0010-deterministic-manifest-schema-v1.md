@@ -11,7 +11,8 @@ indentation, a final LF, and lexicographically sorted file paths.
 The schema records:
 
 - project identity, version, type, and logical entry path;
-- Fluxa probe protocol, reported version when available, and executable hash;
+- Fluxa probe protocol, reported version when available, executable hash, and
+  raw `fluxa.libs` hash;
 - bytecode version and ABI when a real compiler eventually provides them;
 - resolved operating system, architecture, and terminal preference;
 - preflight state, program format, debug state, and source exposure;

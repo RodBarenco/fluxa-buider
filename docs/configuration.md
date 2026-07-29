@@ -122,3 +122,41 @@ Therefore, setting `toolchain.fluxa` currently causes a clear compatibility
 error after discovery: the Builder will not claim that an unreported version
 matches. Once Fluxa exposes a machine-readable version, this field will require
 an exact match.
+
+## Runtime registry
+
+The default registry is `~/.fluxa-builder/runtimes`. It can be inspected and
+populated with:
+
+```sh
+fluxa-builder runtime list
+fluxa-builder runtime add ./fluxa-runtime --metadata ./runtime.json
+```
+
+Use `--registry <path>` on these commands or `--runtime-registry <path>` on
+`build` for an exact alternate registry. `FLUXA_BUILDER_HOME` changes the
+Builder home globally.
+
+`runtime.json` schema v1:
+
+```json
+{
+  "format_version": 1,
+  "fluxa_version": "unreported",
+  "toolchain_sha256": "<64 lowercase hex>",
+  "package_format_version": 1,
+  "bytecode_version": "",
+  "bytecode_abi": "",
+  "libraries_sha256": "<SHA-256 of fluxa.libs, or empty content>",
+  "program_formats": ["fluxa-source"],
+  "os": "linux",
+  "arch": "amd64",
+  "terminal": true,
+  "binary_name": "fluxa-runtime",
+  "binary_sha256": "<64 lowercase hex>"
+}
+```
+
+`runtime add` is an explicit local trust decision. It verifies paths,
+permissions, metadata, and hashes, but signed runtime provenance is not yet
+implemented.

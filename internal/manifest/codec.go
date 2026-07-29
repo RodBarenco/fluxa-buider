@@ -73,7 +73,7 @@ func validateRequiredJSONFields(data []byte) error {
 	}
 	requiredNested := map[string][]string{
 		"project":   {"name", "id", "version", "entry", "type"},
-		"toolchain": {"protocol", "fluxa_sha256"},
+		"toolchain": {"protocol", "fluxa_sha256", "libraries_sha256"},
 		"target":    {"os", "arch", "terminal"},
 		"build":     {"preflight", "program_format", "debug", "source_exposed"},
 	}

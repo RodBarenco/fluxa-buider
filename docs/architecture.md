@@ -96,6 +96,12 @@ A runtime identity must include more than operating system, architecture, and
 Fluxa release. It must also identify the build-time `fluxa.libs` selection,
 relevant compile flags, optional library backends, and bytecode/package ABI.
 
+Verified runtimes live in a local registry keyed by Fluxa version, target, and
+terminal mode.
+Metadata additionally binds the binary hash, toolchain hash, package format,
+program representation, terminal mode, and raw `fluxa.libs` hash. Resolution
+rehashes every candidate and fails closed if no single exact match exists.
+
 ## Terminal mode
 
 Project configuration will include an explicit terminal preference, planned as

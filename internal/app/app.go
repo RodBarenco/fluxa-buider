@@ -17,6 +17,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
+	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -42,6 +43,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runInspect(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "runtime":
+		return runRuntime(args[1:], stdout, stderr)
 	case "version":
 		if len(args) != 1 {
 			writeString(stderr, "error: version does not accept arguments\n")
@@ -75,9 +78,12 @@ func printUsage(w io.Writer) error {
 	_, err := fmt.Fprintf(w, `Fluxa Builder %s
 
 Usage:
-  fluxa-builder build [project] [--fluxa <path>] [--include-source] [--keep-work]
+  fluxa-builder build [project] [--fluxa <path>] [--runtime-registry <path>]
+                        [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
   fluxa-builder verify <file.flxpkg>
+  fluxa-builder runtime list [--registry <path>]
+  fluxa-builder runtime add <binary> --metadata <runtime.json> [--registry <path>]
   fluxa-builder version
   fluxa-builder help
 `, Version)
@@ -89,33 +95,36 @@ func writeString(w io.Writer, value string) {
 }
 
 type buildOptions struct {
-	projectPath   string
-	fluxaPath     string
-	keepWork      bool
-	includeSource bool
+	projectPath     string
+	fluxaPath       string
+	keepWork        bool
+	includeSource   bool
+	runtimeRegistry string
 }
 
 type buildDependencies struct {
-	resolve       func(toolchain.ResolveOptions) (toolchain.Candidate, error)
-	probe         func(context.Context, string, time.Duration) (toolchain.Identity, error)
-	newWorkspace  func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
-	collect       func(context.Context, *project.Config) (collector.Result, error)
-	compile       func(context.Context, compiler.Request) (compiler.Result, error)
-	newManifest   func(context.Context, manifest.Input) (manifest.Manifest, error)
-	writeManifest func(string, manifest.Manifest) error
-	writePackage  func(context.Context, flxpkg.Request) (flxpkg.Result, error)
+	resolve        func(toolchain.ResolveOptions) (toolchain.Candidate, error)
+	probe          func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	newWorkspace   func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
+	collect        func(context.Context, *project.Config) (collector.Result, error)
+	compile        func(context.Context, compiler.Request) (compiler.Result, error)
+	newManifest    func(context.Context, manifest.Input) (manifest.Manifest, error)
+	writeManifest  func(string, manifest.Manifest) error
+	writePackage   func(context.Context, flxpkg.Request) (flxpkg.Result, error)
+	resolveRuntime func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
 	return buildDependencies{
-		resolve:       toolchain.Resolve,
-		probe:         toolchain.Probe,
-		newWorkspace:  buildpkg.NewWorkspace,
-		collect:       collector.CollectProject,
-		compile:       compiler.Compile,
-		newManifest:   manifest.New,
-		writeManifest: manifest.WriteFile,
-		writePackage:  flxpkg.Write,
+		resolve:        toolchain.Resolve,
+		probe:          toolchain.Probe,
+		newWorkspace:   buildpkg.NewWorkspace,
+		collect:        collector.CollectProject,
+		compile:        compiler.Compile,
+		newManifest:    manifest.New,
+		writeManifest:  manifest.WriteFile,
+		writePackage:   flxpkg.Write,
+		resolveRuntime: runtimepkg.Resolve,
 	}
 }
 
@@ -218,6 +227,29 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to write Fluxa package\ncaused by: %v\n", err)
 		return 1
 	}
+	registryRoot, err := buildRegistryRoot(options.runtimeRegistry)
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to resolve runtime registry\ncaused by: %v\n", err)
+		return 1
+	}
+	selectedRuntime, err := dependencies.resolveRuntime(registryRoot, runtimepkg.Requirement{
+		FluxaVersion:         packageManifest.Toolchain.FluxaVersion,
+		ToolchainSHA256:      packageManifest.Toolchain.FluxaSHA256,
+		PackageFormatVersion: 1,
+		BytecodeVersion:      packageManifest.Toolchain.BytecodeVersion,
+		BytecodeABI:          packageManifest.Toolchain.BytecodeABI,
+		LibrariesSHA256:      packageManifest.Toolchain.LibrariesSHA256,
+		ProgramFormat:        packageManifest.Build.ProgramFormat,
+		OS:                   packageManifest.Target.OS,
+		Arch:                 packageManifest.Target.Arch,
+		Terminal:             packageManifest.Target.Terminal,
+	})
+	if err != nil {
+		_ = workspace.Cleanup()
+		_, _ = fmt.Fprintf(stderr, "error: failed to select compatible Fluxa runtime\ncaused by: %v\n", err)
+		return 1
+	}
 
 	version := identity.Version
 	if version == "" {
@@ -274,6 +306,16 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		writeString(stderr, "error: failed to write package output\n")
 		return 1
 	}
+	if _, err = fmt.Fprintf(
+		stdout,
+		"Runtime selected: %s\nRuntime SHA-256: %s\n",
+		selectedRuntime.BinaryPath,
+		selectedRuntime.Metadata.BinarySHA256,
+	); err != nil {
+		_ = workspace.Cleanup()
+		writeString(stderr, "error: failed to write runtime output\n")
+		return 1
+	}
 	if options.keepWork {
 		_, _ = fmt.Fprintf(stdout, "Workspace retained: %s\n", workspace.Root)
 	} else {
@@ -284,7 +326,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintln(stdout, "Transactional workspace: created and cleaned")
 	}
 
-	writeString(stderr, "error: build stopped after verified package writing; runtime selection is not implemented yet\n")
+	writeString(stderr, "error: build stopped after verified runtime selection; portable output is not implemented yet\n")
 	return 1
 }
 
@@ -350,6 +392,139 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func buildRegistryRoot(explicit string) (string, error) {
+	if explicit != "" {
+		return filepath.Abs(explicit)
+	}
+	return runtimepkg.DefaultRoot(os.Getenv("FLUXA_BUILDER_HOME"))
+}
+
+func runRuntime(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		writeString(stderr, "error: runtime requires list or add\n")
+		return 2
+	}
+	switch args[0] {
+	case "list":
+		return runRuntimeList(args[1:], stdout, stderr)
+	case "add":
+		return runRuntimeAdd(args[1:], stdout, stderr)
+	default:
+		_, _ = fmt.Fprintf(stderr, "error: unknown runtime command %q\n", args[0])
+		return 2
+	}
+}
+
+func runRuntimeList(args []string, stdout, stderr io.Writer) int {
+	registry, err := parseRegistryOnly(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+	root, err := buildRegistryRoot(registry)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to resolve runtime registry\ncaused by: %v\n", err)
+		return 1
+	}
+	values, err := runtimepkg.List(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to list runtimes\ncaused by: %v\n", err)
+		return 1
+	}
+	if len(values) == 0 {
+		writeString(stdout, "No Fluxa runtimes registered\n")
+		return 0
+	}
+	for _, value := range values {
+		_, err := fmt.Fprintf(
+			stdout,
+			"%s  %s/%s  terminal=%t  formats=%s  sha256=%s\n",
+			value.Metadata.FluxaVersion,
+			value.Metadata.OS,
+			value.Metadata.Arch,
+			value.Metadata.Terminal,
+			strings.Join(value.Metadata.ProgramFormats, ","),
+			value.Metadata.BinarySHA256,
+		)
+		if err != nil {
+			writeString(stderr, "error: failed to write runtime list\n")
+			return 1
+		}
+	}
+	return 0
+}
+
+func runRuntimeAdd(args []string, stdout, stderr io.Writer) int {
+	binary, metadataPath, registry, err := parseRuntimeAdd(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+	root, err := buildRegistryRoot(registry)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to resolve runtime registry\ncaused by: %v\n", err)
+		return 1
+	}
+	metadata, err := runtimepkg.ReadMetadata(metadataPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to read runtime metadata\ncaused by: %v\n", err)
+		return 1
+	}
+	added, err := runtimepkg.Add(root, binary, metadata)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to add runtime\ncaused by: %v\n", err)
+		return 1
+	}
+	if _, err := fmt.Fprintf(stdout, "Runtime added: %s\nSHA-256: %s\n", added.BinaryPath, added.Metadata.BinarySHA256); err != nil {
+		writeString(stderr, "error: failed to write runtime result\n")
+		return 1
+	}
+	return 0
+}
+
+func parseRegistryOnly(args []string) (string, error) {
+	registry := ""
+	for index := 0; index < len(args); index++ {
+		if args[index] != "--registry" || index+1 >= len(args) {
+			return "", fmt.Errorf("runtime list accepts only --registry <path>")
+		}
+		index++
+		registry = args[index]
+	}
+	return registry, nil
+}
+
+func parseRuntimeAdd(args []string) (string, string, string, error) {
+	binary := ""
+	metadata := ""
+	registry := ""
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--metadata":
+			if index+1 >= len(args) {
+				return "", "", "", fmt.Errorf("--metadata requires a file path")
+			}
+			index++
+			metadata = args[index]
+		case "--registry":
+			if index+1 >= len(args) {
+				return "", "", "", fmt.Errorf("--registry requires a directory path")
+			}
+			index++
+			registry = args[index]
+		default:
+			if strings.HasPrefix(args[index], "-") || binary != "" {
+				return "", "", "", fmt.Errorf("runtime add accepts exactly one binary path")
+			}
+			binary = args[index]
+		}
+	}
+	if binary == "" || metadata == "" {
+		return "", "", "", fmt.Errorf("runtime add requires <binary> and --metadata <runtime.json>")
+	}
+	return binary, metadata, registry, nil
+}
+
 func resolveManifestTarget(configured string) (string, string, error) {
 	if configured == "host" {
 		osName := runtime.GOOS
@@ -394,6 +569,12 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			options.keepWork = true
 		case "--include-source":
 			options.includeSource = true
+		case "--runtime-registry":
+			if index+1 >= len(args) {
+				return buildOptions{}, fmt.Errorf("--runtime-registry requires a directory path")
+			}
+			index++
+			options.runtimeRegistry = args[index]
 		default:
 			if len(arg) > 0 && arg[0] == '-' {
 				return buildOptions{}, fmt.Errorf("unknown build option %q", arg)
