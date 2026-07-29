@@ -31,6 +31,9 @@ type Request struct {
 	PackageSHA256 string
 	Runtime       runtimepkg.Runtime
 	SourceExposed bool
+	SignaturePath string
+	SignatureHash string
+	SigningKeyID  string
 }
 
 // Result describes a staged portable directory.
@@ -41,6 +44,7 @@ type Result struct {
 	Executable  string
 	Package     string
 	BuildInfo   string
+	Signature   string
 	PackageHash string
 	RuntimeHash string
 }
@@ -58,6 +62,9 @@ type buildInfo struct {
 	PackageSHA256 string `json:"package_sha256"`
 	RuntimeSHA256 string `json:"runtime_sha256"`
 	SourceExposed bool   `json:"source_exposed"`
+	Signature     string `json:"signature,omitempty"`
+	SignatureHash string `json:"signature_sha256,omitempty"`
+	SigningKeyID  string `json:"signing_key_id,omitempty"`
 }
 
 // Build assembles and verifies a private portable directory.
@@ -132,6 +139,22 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	}
 
 	infoPath := filepath.Join(directory, "build-info.json")
+	signaturePath := ""
+	signatureName := ""
+	if request.SignaturePath != "" {
+		if request.SignatureHash == "" || request.SigningKeyID == "" {
+			return Result{}, portableError(ErrorInvalid, "validate signature metadata", request.SignaturePath, errors.New("signature hash and key ID are required"))
+		}
+		signaturePath = packagePath + ".sig"
+		signatureName = filepath.Base(signaturePath)
+		signatureHash, err := copyAndHash(ctx, request.SignaturePath, signaturePath, 0o600)
+		if err != nil {
+			return Result{}, err
+		}
+		if signatureHash != request.SignatureHash {
+			return Result{}, portableError(ErrorIntegrity, "verify copied signature", signaturePath, errors.New("signature SHA-256 mismatch"))
+		}
+	}
 	if err := writeBuildInfo(infoPath, buildInfo{
 		FormatVersion: 1,
 		Name:          request.ProjectName, ProjectID: request.ProjectID, Version: request.Version,
@@ -139,6 +162,8 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		Executable: executableName, Package: packageName,
 		PackageSHA256: packageHash, RuntimeSHA256: runtimeHash,
 		SourceExposed: request.SourceExposed,
+		Signature:     signatureName, SignatureHash: request.SignatureHash,
+		SigningKeyID: request.SigningKeyID,
 	}); err != nil {
 		return Result{}, err
 	}
@@ -146,13 +171,17 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, portableError(ErrorIO, "inspect directory", directory, err)
 	}
-	if len(entries) != 3 {
-		return Result{}, portableError(ErrorInvalid, "validate directory", directory, fmt.Errorf("contains %d entries, expected 3", len(entries)))
+	expectedEntries := 3
+	if signaturePath != "" {
+		expectedEntries++
+	}
+	if len(entries) != expectedEntries {
+		return Result{}, portableError(ErrorInvalid, "validate directory", directory, fmt.Errorf("contains %d entries, expected %d", len(entries), expectedEntries))
 	}
 	complete = true
 	return Result{
 		Directory: directory, Name: name, TargetOS: request.TargetOS, Executable: executablePath,
-		Package: packagePath, BuildInfo: infoPath,
+		Package: packagePath, BuildInfo: infoPath, Signature: signaturePath,
 		PackageHash: packageHash, RuntimeHash: runtimeHash,
 	}, nil
 }

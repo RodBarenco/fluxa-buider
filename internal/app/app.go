@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
+	"github.com/RodBarenco/fluxa-builder/internal/signing"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -80,9 +82,9 @@ func printUsage(w io.Writer) error {
 
 Usage:
   fluxa-builder build [project] [--fluxa <path>] [--runtime-registry <path>]
-                        [--include-source] [--keep-work]
+                        [--sign-key <path>] [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
-  fluxa-builder verify <file.flxpkg>
+  fluxa-builder verify <file.flxpkg> [--signature <file.sig> --public-key <signing.pub>]
   fluxa-builder runtime list [--registry <path>]
   fluxa-builder runtime add <binary> --metadata <runtime.json> [--registry <path>]
   fluxa-builder version
@@ -101,6 +103,7 @@ type buildOptions struct {
 	keepWork        bool
 	includeSource   bool
 	runtimeRegistry string
+	signKeyPath     string
 }
 
 type buildDependencies struct {
@@ -112,6 +115,7 @@ type buildDependencies struct {
 	newManifest     func(context.Context, manifest.Input) (manifest.Manifest, error)
 	writeManifest   func(string, manifest.Manifest) error
 	writePackage    func(context.Context, flxpkg.Request) (flxpkg.Result, error)
+	signPackage     func(string, string, string) (signing.Result, error)
 	resolveRuntime  func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
 	buildPortable   func(context.Context, portable.Request) (portable.Result, error)
 	smokePortable   func(context.Context, portable.Result, time.Duration) error
@@ -128,6 +132,7 @@ func defaultBuildDependencies() buildDependencies {
 		newManifest:     manifest.New,
 		writeManifest:   manifest.WriteFile,
 		writePackage:    flxpkg.Write,
+		signPackage:     signing.Sign,
 		resolveRuntime:  runtimepkg.Resolve,
 		buildPortable:   portable.Build,
 		smokePortable:   portable.Smoke,
@@ -237,6 +242,16 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		_, _ = fmt.Fprintf(stderr, "error: failed to write Fluxa package\ncaused by: %v\n", err)
 		return 1
 	}
+	signKeyPath := resolveSignKeyPath(options.signKeyPath, os.Getenv)
+	var signatureResult signing.Result
+	if signKeyPath != "" {
+		signatureResult, err = dependencies.signPackage(packageResult.Path, signKeyPath, packageResult.Path+".sig")
+		if err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to sign Fluxa package\ncaused by: %v\n", err)
+			return 1
+		}
+	}
 	registryRoot, err := buildRegistryRoot(options.runtimeRegistry)
 	if err != nil {
 		_ = workspace.Cleanup()
@@ -279,6 +294,9 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		PackageSHA256: packageResult.SHA256,
 		Runtime:       selectedRuntime,
 		SourceExposed: packageManifest.Build.SourceExposed,
+		SignaturePath: signatureResult.Path,
+		SignatureHash: signatureResult.SHA256,
+		SigningKeyID:  signatureResult.KeyID,
 	})
 	if err != nil {
 		_ = workspace.Cleanup()
@@ -369,6 +387,19 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		writeString(stderr, "error: failed to write package output\n")
 		return 1
 	}
+	if signatureResult.Path != "" {
+		if _, err = fmt.Fprintf(
+			stdout,
+			"Package signature: %s\nSigning key ID: %s\nSignature SHA-256: %s\n",
+			filepath.Base(signatureResult.Path),
+			signatureResult.KeyID,
+			signatureResult.SHA256,
+		); err != nil {
+			_ = workspace.Cleanup()
+			writeString(stderr, "error: failed to write signature output\n")
+			return 1
+		}
+	}
 	if _, err = fmt.Fprintf(
 		stdout,
 		"Portable application verified\nOutput: %s\nExecutable: %s\nPackage: %s\n",
@@ -430,20 +461,79 @@ func packageSources(compiledDir string, collection collector.Result, compilation
 }
 
 func runVerify(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		writeString(stderr, "error: verify requires exactly one .flxpkg path\n")
+	packagePath, signaturePath, publicKeyPath, err := parseVerifyOptions(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
-	info, err := flxpkg.Verify(args[0])
+	info, err := flxpkg.Verify(packagePath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "error: package verification failed\ncaused by: %v\n", err)
 		return 1
+	}
+	var signatureResult signing.Result
+	if publicKeyPath != "" {
+		if signaturePath == "" {
+			signaturePath = packagePath + ".sig"
+		}
+		signatureResult, err = signing.Verify(packagePath, signaturePath, publicKeyPath)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "error: package signature verification failed\ncaused by: %v\n", err)
+			return 1
+		}
 	}
 	if _, err := fmt.Fprintf(stdout, "valid Fluxa package\nFiles: %d\nBytes: %d\nSHA-256: %s\n", len(info.Entries), info.Size, info.SHA256); err != nil {
 		writeString(stderr, "error: failed to write verification output\n")
 		return 1
 	}
+	if signatureResult.Path != "" {
+		if _, err := fmt.Fprintf(stdout, "valid Ed25519 signature\nKey ID: %s\nSignature SHA-256: %s\n", signatureResult.KeyID, signatureResult.SHA256); err != nil {
+			writeString(stderr, "error: failed to write signature verification output\n")
+			return 1
+		}
+	}
 	return 0
+}
+
+func parseVerifyOptions(args []string) (packagePath, signaturePath, publicKeyPath string, err error) {
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--signature":
+			if index+1 >= len(args) {
+				return "", "", "", errors.New("--signature requires a file path")
+			}
+			index++
+			signaturePath = args[index] // #nosec G602 -- bounds checked before increment.
+		case "--public-key":
+			if index+1 >= len(args) {
+				return "", "", "", errors.New("--public-key requires a file path")
+			}
+			index++
+			publicKeyPath = args[index] // #nosec G602 -- bounds checked before increment.
+		default:
+			if strings.HasPrefix(args[index], "-") {
+				return "", "", "", fmt.Errorf("unknown verify option %q", args[index])
+			}
+			if packagePath != "" {
+				return "", "", "", errors.New("verify accepts exactly one .flxpkg path")
+			}
+			packagePath = args[index]
+		}
+	}
+	if packagePath == "" {
+		return "", "", "", errors.New("verify requires exactly one .flxpkg path")
+	}
+	if signaturePath != "" && publicKeyPath == "" {
+		return "", "", "", errors.New("--signature requires --public-key")
+	}
+	return packagePath, signaturePath, publicKeyPath, nil
+}
+
+func resolveSignKeyPath(explicit string, getenv func(string) string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return getenv("FLUXA_SIGN_KEY")
 }
 
 func runInspect(args []string, stdout, stderr io.Writer) int {
@@ -676,6 +766,12 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			}
 			index++
 			options.runtimeRegistry = args[index]
+		case "--sign-key":
+			if index+1 >= len(args) {
+				return buildOptions{}, fmt.Errorf("--sign-key requires a private key path")
+			}
+			index++
+			options.signKeyPath = args[index]
 		default:
 			if len(arg) > 0 && arg[0] == '-' {
 				return buildOptions{}, fmt.Errorf("unknown build option %q", arg)

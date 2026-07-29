@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
+	"github.com/RodBarenco/fluxa-builder/internal/signing"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
 )
 
@@ -145,6 +147,19 @@ terminal = false
 		t.Fatal(err)
 	}
 	runtimeHash := sha256.Sum256(runtimeBytes)
+	publicKey, privateKey, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyRoot := t.TempDir()
+	privateKeyPath := filepath.Join(keyRoot, "signing.key")
+	publicKeyPath := filepath.Join(keyRoot, "signing.pub")
+	if err := os.WriteFile(privateKeyPath, privateKey, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(publicKeyPath, publicKey, 0o400); err != nil {
+		t.Fatal(err)
+	}
 	targetOS := runtime.GOOS
 	if targetOS == "darwin" {
 		targetOS = "macos"
@@ -174,6 +189,7 @@ terminal = false
 		newManifest:   manifest.New,
 		writeManifest: manifest.WriteFile,
 		writePackage:  flxpkg.Write,
+		signPackage:   signing.Sign,
 		resolveRuntime: func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error) {
 			return runtimepkg.Runtime{
 				BinaryPath: runtimePath,
@@ -189,7 +205,9 @@ terminal = false
 		},
 		archivePortable: portable.Archive,
 	}
-	code := runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
+	code := runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--sign-key", privateKeyPath,
+	}, &stdout, &stderr, dependencies)
 
 	if code != 0 {
 		t.Fatalf("Run(build) code = %d, want 0; stderr=%q", code, stderr.String())
@@ -223,6 +241,10 @@ terminal = false
 		!strings.Contains(stdout.String(), "Archive SHA-256:") {
 		t.Fatalf("Run(build) stdout = %q, want archive summary", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "Package signature:") ||
+		!strings.Contains(stdout.String(), "Signing key ID:") {
+		t.Fatalf("Run(build) stdout = %q, want signature summary", stdout.String())
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("Run(build) stderr = %q, want empty", stderr.String())
 	}
@@ -235,6 +257,19 @@ terminal = false
 	}
 	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension+".sha256")); err != nil {
 		t.Fatalf("archive checksum missing: %v", err)
+	}
+	publishedPackage := filepath.Join(targetOutput, "cli-test", "cli-test.flxpkg")
+	publishedSignature := publishedPackage + ".sig"
+	if _, err := signing.Verify(publishedPackage, publishedSignature, publicKeyPath); err != nil {
+		t.Fatalf("published signature invalid: %v", err)
+	}
+	var verifyStdout bytes.Buffer
+	var verifyStderr bytes.Buffer
+	if code := runVerify([]string{publishedPackage, "--public-key", publicKeyPath}, &verifyStdout, &verifyStderr); code != 0 {
+		t.Fatalf("signed verify code=%d stdout=%q stderr=%q", code, verifyStdout.String(), verifyStderr.String())
+	}
+	if !strings.Contains(verifyStdout.String(), "valid Ed25519 signature") {
+		t.Fatalf("signed verify stdout=%q", verifyStdout.String())
 	}
 	workDir := filepath.Join(root, ".fluxa-builder", "work")
 	entries, err := os.ReadDir(workDir)
@@ -253,7 +288,9 @@ terminal = false
 	dependencies.smokePortable = func(context.Context, portable.Result, time.Duration) error {
 		return errors.New("runtime rejected package")
 	}
-	code = runBuild([]string{root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source"}, &stdout, &stderr, dependencies)
+	code = runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--sign-key", privateKeyPath,
+	}, &stdout, &stderr, dependencies)
 	if code != 1 || !strings.Contains(stderr.String(), "smoke test failed") {
 		t.Fatalf("failed smoke code=%d stderr=%q", code, stderr.String())
 	}
@@ -400,6 +437,11 @@ func TestParseBuildOptions(t *testing.T) {
 			want: buildOptions{projectPath: "my project", runtimeRegistry: "/tmp/runtimes"},
 		},
 		{
+			name: "sign key",
+			args: []string{"my project", "--sign-key", "/secure/signing.key"},
+			want: buildOptions{projectPath: "my project", signKeyPath: "/secure/signing.key"},
+		},
+		{
 			name:      "missing flag value",
 			args:      []string{"--fluxa"},
 			wantError: "requires",
@@ -434,5 +476,45 @@ func TestParseBuildOptions(t *testing.T) {
 				t.Errorf("parseBuildOptions() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveSignKeyPath(t *testing.T) {
+	t.Parallel()
+	getenv := func(name string) string {
+		if name != "FLUXA_SIGN_KEY" {
+			t.Fatalf("environment name = %q", name)
+		}
+		return "/environment/signing.key"
+	}
+	if got := resolveSignKeyPath("", getenv); got != "/environment/signing.key" {
+		t.Fatalf("environment key = %q", got)
+	}
+	if got := resolveSignKeyPath("/explicit/signing.key", getenv); got != "/explicit/signing.key" {
+		t.Fatalf("explicit key = %q", got)
+	}
+}
+
+func TestParseVerifyOptions(t *testing.T) {
+	t.Parallel()
+	packagePath, signaturePath, publicPath, err := parseVerifyOptions([]string{
+		"game.flxpkg", "--signature", "game.sig", "--public-key", "signing.pub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packagePath != "game.flxpkg" || signaturePath != "game.sig" || publicPath != "signing.pub" {
+		t.Fatalf("verify options = %q %q %q", packagePath, signaturePath, publicPath)
+	}
+	for _, args := range [][]string{
+		nil,
+		{"one.flxpkg", "two.flxpkg"},
+		{"game.flxpkg", "--signature", "game.sig"},
+		{"game.flxpkg", "--public-key"},
+		{"game.flxpkg", "--unknown"},
+	} {
+		if _, _, _, err := parseVerifyOptions(args); err == nil {
+			t.Fatalf("parseVerifyOptions(%q) succeeded", args)
+		}
 	}
 }

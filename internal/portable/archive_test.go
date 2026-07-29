@@ -97,6 +97,33 @@ func TestSafeZIPExtractorRejectsZipSlip(t *testing.T) {
 	}
 }
 
+func TestArchiveIncludesDetachedSignature(t *testing.T) {
+	fixture := newFixture(t, "Signed Game", true)
+	signatureData := []byte("{\"signature\":\"fixture\"}\n")
+	signaturePath := filepath.Join(filepath.Dir(fixture.request.PackagePath), "package.sig")
+	if err := os.WriteFile(signaturePath, signatureData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(signatureData)
+	fixture.request.SignaturePath = signaturePath
+	fixture.request.SignatureHash = hex.EncodeToString(digest[:])
+	fixture.request.SigningKeyID = strings.Repeat("c", 64)
+	result, err := portable.Build(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := portable.Archive(context.Background(), result, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := t.TempDir()
+	extractTarGZ(t, archive.Path, extracted)
+	assertExtractedMatches(t, result, filepath.Join(extracted, result.Name))
+	if _, err := os.Stat(filepath.Join(extracted, result.Name, result.Name+".flxpkg.sig")); err != nil {
+		t.Fatalf("detached signature missing after extraction: %v", err)
+	}
+}
+
 type archivedFixture struct {
 	portable portable.Result
 	archive  portable.ArchiveResult

@@ -21,6 +21,15 @@ import (
 
 func TestBuildPortableNamesWithSpacesAndUnicode(t *testing.T) {
 	fixture := newFixture(t, "Minha Ação Espacial", true)
+	signatureData := []byte("{\"signature\":\"fixture\"}\n")
+	signaturePath := filepath.Join(filepath.Dir(fixture.request.PackagePath), "package.sig")
+	if err := os.WriteFile(signaturePath, signatureData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signatureDigest := sha256.Sum256(signatureData)
+	fixture.request.SignaturePath = signaturePath
+	fixture.request.SignatureHash = hex.EncodeToString(signatureDigest[:])
+	fixture.request.SigningKeyID = strings.Repeat("b", 64)
 	result, err := portable.Build(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -30,6 +39,9 @@ func TestBuildPortableNamesWithSpacesAndUnicode(t *testing.T) {
 	}
 	if filepath.Base(result.Executable) != result.Name || filepath.Base(result.Package) != result.Name+".flxpkg" {
 		t.Fatalf("result paths = %#v", result)
+	}
+	if filepath.Base(result.Signature) != result.Name+".flxpkg.sig" {
+		t.Fatalf("Signature = %q", result.Signature)
 	}
 	if _, err := flxpkg.Verify(result.Package); err != nil {
 		t.Fatalf("copied package invalid: %v", err)
@@ -42,7 +54,8 @@ func TestBuildPortableNamesWithSpacesAndUnicode(t *testing.T) {
 	if err := json.Unmarshal(data, &info); err != nil {
 		t.Fatal(err)
 	}
-	if info["name"] != "Minha Ação Espacial" || info["source_exposed"] != true {
+	if info["name"] != "Minha Ação Espacial" || info["source_exposed"] != true ||
+		info["signing_key_id"] != fixture.request.SigningKeyID {
 		t.Fatalf("build-info = %#v", info)
 	}
 }

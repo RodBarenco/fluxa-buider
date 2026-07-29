@@ -113,7 +113,12 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 		filepath.Base(portable.Package):    false,
 		filepath.Base(portable.BuildInfo):  false,
 	}
-	if len(expected) != 3 {
+	expectedCount := 3
+	if portable.Signature != "" {
+		expected[filepath.Base(portable.Signature)] = false
+		expectedCount++
+	}
+	if len(expected) != expectedCount {
 		return nil, portableError(ErrorInvalid, "validate archive input", portable.Directory,
 			errors.New("portable result paths are missing or collide"))
 	}
