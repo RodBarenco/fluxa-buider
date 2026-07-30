@@ -64,6 +64,25 @@ func TestInstalledInvocationDetection(t *testing.T) {
 	}
 }
 
+func TestInstalledLayoutForMacOSBundle(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(
+		string(filepath.Separator), "Applications", "Starfight.app",
+		"Contents", "MacOS", "starfight",
+	)
+	layout := installedLayoutFor(executable)
+	if want := filepath.Join(string(filepath.Separator), "Applications", "Starfight.app", "Contents", "Resources"); layout.packageDirectory != want {
+		t.Errorf("package directory = %q, want %q", layout.packageDirectory, want)
+	}
+	if want := filepath.Join(string(filepath.Separator), "Applications", "Starfight.app", "Contents", "MacOS"); layout.runtimeDirectory != want {
+		t.Errorf("runtime directory = %q, want %q", layout.runtimeDirectory, want)
+	}
+	if want := filepath.Join(string(filepath.Separator), "Applications"); layout.distributionDirectory != want {
+		t.Errorf("distribution directory = %q, want %q", layout.distributionDirectory, want)
+	}
+}
+
 func TestRunHelp(t *testing.T) {
 	t.Parallel()
 

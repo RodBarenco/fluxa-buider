@@ -127,8 +127,10 @@ Here the database stays internal while earned cards appear in a visible
 
 The official Linux target is currently `linux-x64`. Its optional icon must be a
 bounded, valid PNG. Internal data lives below
-`$XDG_DATA_HOME/fluxa/<project.id>/project`, defaulting to
-`~/.local/share/fluxa/<project.id>/project`. Explicit exports may be mirrored to
+Linux uses `$XDG_DATA_HOME/fluxa/<project.id>/project`, defaulting to
+`~/.local/share/fluxa/<project.id>/project`. Windows uses
+`%AppData%\fluxa\<project.id>\project`, and macOS uses
+`~/Library/Application Support/fluxa/<project.id>/project`. Explicit exports may be mirrored to
 the portable directory or Documents as described above. The runtime binary,
 not the Builder, determines the glibc compatibility baseline.
 

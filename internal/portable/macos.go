@@ -14,6 +14,10 @@ import (
 )
 
 func buildMacOS(ctx context.Context, request Request) (Result, error) {
+	if request.LauncherPath == "" {
+		return Result{}, portableError(ErrorInvalid, "validate macOS launcher", "",
+			errors.New("integrated application launcher is required"))
+	}
 	name := artifactName(request.ProjectName, request.ProjectID)
 	bundleName := name + ".app"
 	bundle := filepath.Join(request.OutputRoot, bundleName)
@@ -34,16 +38,26 @@ func buildMacOS(ctx context.Context, request Request) (Result, error) {
 	}()
 
 	executable := filepath.Join(macOSDir, name)
-	runtimeHash, err := copyAndHash(ctx, request.Runtime.BinaryPath, executable, 0o700)
+	if _, err := copyAndHash(ctx, request.LauncherPath, executable, 0o700); err != nil {
+		return Result{}, portableError(ErrorIO, "copy macOS application launcher", request.LauncherPath, err)
+	}
+	if request.Runtime.Metadata.FormatVersion != 0 {
+		if err := macospkg.ValidateMachO(executable, request.TargetArch); err != nil {
+			return Result{}, portableError(ErrorIntegrity, "verify copied macOS launcher", executable, err)
+		}
+	}
+
+	privateRuntime := filepath.Join(macOSDir, ".fluxa-runtime")
+	runtimeHash, err := copyAndHash(ctx, request.Runtime.BinaryPath, privateRuntime, 0o700)
 	if err != nil {
 		return Result{}, err
 	}
 	if runtimeHash != request.Runtime.Metadata.BinarySHA256 {
-		return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", executable, errors.New("runtime SHA-256 mismatch"))
+		return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", privateRuntime, errors.New("runtime SHA-256 mismatch"))
 	}
 	if request.Runtime.Metadata.FormatVersion != 0 {
-		if err := macospkg.ValidateMachO(executable, request.TargetArch); err != nil {
-			return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", executable, err)
+		if err := macospkg.ValidateMachO(privateRuntime, request.TargetArch); err != nil {
+			return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", privateRuntime, err)
 		}
 	}
 
@@ -59,7 +73,7 @@ func buildMacOS(ctx context.Context, request Request) (Result, error) {
 		return Result{}, portableError(ErrorIntegrity, "verify copied macOS package", packagePath, err)
 	}
 
-	extra := make([]string, 0, 2)
+	extra := []string{privateRuntime}
 	iconName := ""
 	if request.MacOSIcon != "" {
 		if err := macospkg.ValidateICNS(request.MacOSIcon); err != nil {

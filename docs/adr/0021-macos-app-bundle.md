@@ -2,10 +2,8 @@
 
 Status: accepted
 
-The current bundle still places the registered runtime directly in
-`Contents/MacOS`. Migration to the integrated launcher from ADR 0023 is the next
-macOS packaging step and must pass the native x64/arm64 gates before replacing
-this layout.
+The bundle uses the integrated launcher from ADR 0023. The registered packaged
+runtime is private and cannot be used as the public Fluxa CLI.
 
 ## Official targets
 
@@ -23,7 +21,8 @@ The Builder copies it without relinking or modifying load commands.
 application.app/
 └── Contents/
     ├── MacOS/
-    │   └── application
+    │   ├── application
+    │   └── .fluxa-runtime
     ├── Resources/
     │   ├── application.flxpkg
     │   ├── application.flxpkg.sig  (optional)
@@ -32,7 +31,8 @@ application.app/
     └── Info.plist
 ```
 
-The executable is mode `0700`; resources and metadata are `0600`. `Info.plist`
+The launcher and private runtime are mode `0700`; resources and metadata are
+`0600`. `Info.plist`
 is deterministic XML and records display name, bundle identifier, executable,
 semantic version, package type, and optional icon. If
 `targets.macos.bundle_id` is omitted, `project.id` is used.
@@ -49,6 +49,7 @@ plist, executes the package self-test from `Contents/MacOS`, confirms package
 discovery under `Contents/Resources`, and validates the complete deterministic
 tar.gz hierarchy.
 
-Code signing, hardened runtime entitlements, notarization, DMG/PKG installers,
-and universal binaries are intentionally deferred. Ed25519 package signatures
-remain distinct from Apple code signing.
+The native gate covers the unsigned development artifact. Public distribution
+still requires Developer ID signing of nested Mach-O code, hardened runtime,
+notarization, and ticket stapling. Ed25519 package signatures remain distinct
+from Apple code signing.

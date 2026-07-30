@@ -208,7 +208,8 @@ func macOSArchiveEntries(result Result) ([]archiveEntry, error) {
 		mode := os.FileMode(0o600)
 		if entry.IsDir() {
 			mode = 0o755
-		} else if path == result.Executable {
+		} else if path == result.Executable ||
+			filepath.Base(path) == ".fluxa-runtime" {
 			mode = 0o700
 		} else if !info.Mode().IsRegular() {
 			return errors.New("bundle entries must be directories or regular files")

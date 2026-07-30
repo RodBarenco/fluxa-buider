@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
@@ -154,13 +155,9 @@ func mergeTree(sourceRoot, destinationRoot string, persistent []string, program 
 }
 
 func persistentProjectRoot(projectID string) (string, error) {
-	dataRoot := os.Getenv("XDG_DATA_HOME")
-	if dataRoot == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user data directory: %w", err)
-		}
-		dataRoot = filepath.Join(home, ".local", "share")
+	dataRoot, err := platformDataRoot()
+	if err != nil {
+		return "", err
 	}
 	root := filepath.Join(dataRoot, "fluxa", projectID, "project")
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -171,6 +168,24 @@ func persistentProjectRoot(projectID string) (string, error) {
 		return "", errors.New("persistent application data path is unsafe")
 	}
 	return root, nil
+}
+
+func platformDataRoot() (string, error) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		root, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve platform application data directory: %w", err)
+		}
+		return root, nil
+	}
+	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
+		return root, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user data directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "share"), nil
 }
 
 func removeProgramSources(root string) error {

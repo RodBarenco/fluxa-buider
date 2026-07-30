@@ -26,8 +26,8 @@ func IsInstalledInvocation(executable string) bool {
 
 // RunInstalled executes a portable application assembled by Fluxa Builder.
 func RunInstalled(executable string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	directory := filepath.Dir(executable)
-	packagePath, err := installedPackage(directory)
+	layout := installedLayoutFor(executable)
+	packagePath, err := installedPackage(layout.packageDirectory)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Fluxa application error: %v\n", err)
 		return 1
@@ -57,8 +57,8 @@ func RunInstalled(executable string, args []string, stdin io.Reader, stdout, std
 	}
 	if err := runner.Run(context.Background(), runner.Request{
 		PackagePath:     packagePath,
-		RuntimePath:     filepath.Join(directory, runtimeName),
-		DistributionDir: directory,
+		RuntimePath:     filepath.Join(layout.runtimeDirectory, runtimeName),
+		DistributionDir: layout.distributionDirectory,
 		PackagedRuntime: true,
 		Stdin:           stdin,
 		Stdout:          stdout,
@@ -68,6 +68,34 @@ func RunInstalled(executable string, args []string, stdin io.Reader, stdout, std
 		return 1
 	}
 	return 0
+}
+
+type installedLayout struct {
+	packageDirectory      string
+	runtimeDirectory      string
+	distributionDirectory string
+}
+
+func installedLayoutFor(executable string) installedLayout {
+	executableDirectory := filepath.Dir(executable)
+	layout := installedLayout{
+		packageDirectory:      executableDirectory,
+		runtimeDirectory:      executableDirectory,
+		distributionDirectory: executableDirectory,
+	}
+	// A macOS application launcher lives at:
+	// <name>.app/Contents/MacOS/<name>. The immutable package belongs in
+	// Resources, while user-visible exports should be written beside the app
+	// (or fall back to Documents when that location is not writable).
+	if filepath.Base(executableDirectory) == "MacOS" {
+		contents := filepath.Dir(executableDirectory)
+		if filepath.Base(contents) == "Contents" &&
+			strings.HasSuffix(strings.ToLower(filepath.Base(filepath.Dir(contents))), ".app") {
+			layout.packageDirectory = filepath.Join(contents, "Resources")
+			layout.distributionDirectory = filepath.Dir(filepath.Dir(contents))
+		}
+	}
+	return layout
 }
 
 func installedPackage(directory string) (string, error) {

@@ -127,11 +127,10 @@ accepts only identity probing plus the launcher's private execution protocol.
 
 ## Runtime data
 
-Each application has a stable project data root keyed by `project.id`. Linux
-uses `$XDG_DATA_HOME/fluxa/<project.id>/project`, with the standard
-`~/.local/share` fallback. Packaged source is refreshed on every launch, while
-declared persistent files remain untouched after their first seed or runtime
-creation.
+Each application has a stable project data root keyed by `project.id`. It uses
+XDG data on Linux, AppData on Windows, and Application Support on macOS.
+Packaged source is refreshed on every launch, while declared persistent files
+remain untouched after their first seed or runtime creation.
 
 Exports are necessarily copies, not the authoritative save location. They are
 written beside a writable portable application or below

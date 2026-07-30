@@ -50,6 +50,7 @@ func TestMacOSOfficialAppBundlePipeline(t *testing.T) {
 	fixture.request.Runtime.Metadata.OS = "macos"
 	fixture.request.Runtime.Metadata.Arch = runtime.GOARCH
 	fixture.request.Runtime.Metadata.BinarySHA256 = hex.EncodeToString(runtimeHash[:])
+	fixture.request.LauncherPath = runtimePath
 	fixture.request.OutputRoot = filepath.Join(t.TempDir(), "Usuário macOS com espaços")
 	if err := os.MkdirAll(fixture.request.OutputRoot, 0o700); err != nil {
 		t.Fatal(err)
@@ -70,6 +71,10 @@ func TestMacOSOfficialAppBundlePipeline(t *testing.T) {
 	wantPackage := filepath.Join(result.Directory, "Contents", "Resources", "minha-aplicação-espacial.flxpkg")
 	if result.Executable != wantExecutable || result.Package != wantPackage {
 		t.Fatalf("bundle result = %#v", result)
+	}
+	privateRuntime := filepath.Join(result.Directory, "Contents", "MacOS", ".fluxa-runtime")
+	if _, err := os.Stat(privateRuntime); err != nil {
+		t.Fatalf("private runtime is missing: %v", err)
 	}
 	plistPath := filepath.Join(result.Directory, "Contents", "Info.plist")
 	plist, err := os.ReadFile(plistPath) // #nosec G304 -- test-owned bundle.
@@ -155,7 +160,7 @@ func assertMacOSArchive(t *testing.T, archivePath, root string) {
 	}
 	defer func() { _ = gzipReader.Close() }()
 	reader := tar.NewReader(gzipReader)
-	seenExecutable := false
+	seenExecutables := 0
 	count := 0
 	for {
 		header, err := reader.Next()
@@ -170,10 +175,13 @@ func assertMacOSArchive(t *testing.T, archivePath, root string) {
 			t.Fatalf("unsafe tar entry %q", header.Name)
 		}
 		if strings.Contains(header.Name, "/Contents/MacOS/") && header.Typeflag == tar.TypeReg {
-			seenExecutable = header.Mode == 0o700
+			if header.Mode != 0o700 {
+				t.Fatalf("Mach-O mode = %o, want 700", header.Mode)
+			}
+			seenExecutables++
 		}
 	}
-	if count != 9 || !seenExecutable {
-		t.Fatalf("tar entries = %d, executable mode valid = %t", count, seenExecutable)
+	if count != 10 || seenExecutables != 2 {
+		t.Fatalf("tar entries = %d, executable Mach-O files = %d", count, seenExecutables)
 	}
 }

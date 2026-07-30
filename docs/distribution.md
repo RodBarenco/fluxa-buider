@@ -158,13 +158,16 @@ For an immutable installation such as `/opt`, the fallback is:
 ~/Documents/<project.name>/cards/
 ```
 
-The authoritative internal Linux state remains:
+The authoritative internal state uses the native per-user application-data
+directory:
 
 ```text
-$XDG_DATA_HOME/fluxa/<project.id>/project/
+Linux:   $XDG_DATA_HOME/fluxa/<project.id>/project/
+Windows: %AppData%\fluxa\<project.id>\project\
+macOS:   ~/Library/Application Support/fluxa/<project.id>/project/
 ```
 
-or, when `XDG_DATA_HOME` is unset:
+On Linux, when `XDG_DATA_HOME` is unset, the fallback is:
 
 ```text
 ~/.local/share/fluxa/<project.id>/project/

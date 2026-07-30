@@ -74,10 +74,12 @@ writable portable application or under Documents for read-only installations.
 glibc compatibility follows the selected runtime binary; the Builder does not
 relink or rewrite it.
 
-macOS builds produce a conventional `.app` containing a thin x64 or arm64
-Mach-O runtime, the FLXPKG under `Contents/Resources`, deterministic
-`Info.plist`, and an optional validated ICNS icon. Universal binaries, Apple
-code signing, and notarization are not yet implemented.
+macOS builds produce a conventional `.app` containing a named launcher and
+private thin x64 or arm64 Mach-O runtime under `Contents/MacOS`, the FLXPKG
+under `Contents/Resources`, deterministic `Info.plist`, and an optional
+validated ICNS icon. The unsigned bundle is a development artifact; public
+distribution still requires Developer ID signing, hardened runtime,
+notarization, and ticket stapling.
 
 Linux x64 builds also emit a deterministic `.deb`. It installs immutable
 application files under `/opt/<project.id>`, a launcher under `/usr/bin`, a
