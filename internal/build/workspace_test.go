@@ -28,7 +28,7 @@ func TestNewWorkspaceCreatesIsolatedLayout(t *testing.T) {
 	if workspace.ID != "0123456789abcdef0123456789abcdef" {
 		t.Errorf("ID = %q", workspace.ID)
 	}
-	wantRoot := filepath.Join(projectRoot, ".fluxa-builder", "work", workspace.ID)
+	wantRoot := filepath.Join(canonicalPath(t, projectRoot), ".fluxa-builder", "work", workspace.ID)
 	if workspace.Root != wantRoot {
 		t.Errorf("Root = %q, want %q", workspace.Root, wantRoot)
 	}
@@ -54,6 +54,15 @@ func TestNewWorkspaceCreatesIsolatedLayout(t *testing.T) {
 			t.Errorf("%q permissions = %o, want no group/other access", directory, info.Mode().Perm())
 		}
 	}
+}
+
+func canonicalPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(resolved)
 }
 
 func TestWorkspaceCleanup(t *testing.T) {

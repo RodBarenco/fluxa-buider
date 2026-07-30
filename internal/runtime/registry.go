@@ -188,16 +188,21 @@ func List(root string) ([]Runtime, error) {
 	if err != nil {
 		return nil, runtimeError(ErrorIO, "resolve registry", root, err)
 	}
-	info, err := os.Stat(root)
+	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Runtime{}, nil
 	}
 	if err != nil {
 		return nil, runtimeError(ErrorIO, "inspect registry", root, err)
 	}
-	if !info.IsDir() {
-		return nil, runtimeError(ErrorInvalid, "validate registry", root, errors.New("registry root is not a directory"))
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, runtimeError(ErrorInvalid, "validate registry", root, errors.New("registry root must be a non-symlink directory"))
 	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, runtimeError(ErrorIO, "resolve registry", root, err)
+	}
+	root = filepath.Clean(root)
 	var runtimes []Runtime
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
