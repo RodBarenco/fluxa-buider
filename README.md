@@ -70,6 +70,11 @@ read-only. Fluxa runtimes must store writable data through the XDG Base
 Directory locations. glibc compatibility follows the selected runtime binary;
 the Builder does not relink or rewrite it.
 
+macOS builds produce a conventional `.app` containing a thin x64 or arm64
+Mach-O runtime, the FLXPKG under `Contents/Resources`, deterministic
+`Info.plist`, and an optional validated ICNS icon. Universal binaries, Apple
+code signing, and notarization are not yet implemented.
+
 ## Scope
 
 The first functional milestone will run:

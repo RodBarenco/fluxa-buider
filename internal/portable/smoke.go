@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -54,7 +55,11 @@ func SmokeDetailed(ctx context.Context, result Result, timeout time.Duration) (S
 	if err != nil {
 		return SmokeReport{}, portableError(ErrorIntegrity, "pre-smoke package verification", result.Package, err)
 	}
-	return SmokeExecutable(ctx, result.Executable, result.Directory, packageInfo.SHA256, timeout)
+	directory := result.Directory
+	if result.TargetOS == "macos" {
+		directory = filepath.Dir(result.Package)
+	}
+	return SmokeExecutable(ctx, result.Executable, directory, packageInfo.SHA256, timeout)
 }
 
 // SmokeExecutable runs the self-test contract for a sibling or embedded package.

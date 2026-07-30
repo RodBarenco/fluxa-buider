@@ -48,6 +48,10 @@ jobs:
         if: runner.os == 'Linux'
         run: go test ./internal/portable -run TestLinuxX64OfficialPortablePipeline -count=1
 
+      - name: macOS official app bundle integration
+        if: runner.os == 'macOS'
+        run: go test ./internal/portable -run TestMacOSOfficialAppBundlePipeline -count=1
+
       - name: Race test
         run: go test -race ./...
 

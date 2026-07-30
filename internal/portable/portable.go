@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	linuxpkg "github.com/RodBarenco/fluxa-builder/internal/linux"
+	macospkg "github.com/RodBarenco/fluxa-builder/internal/macos"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
@@ -38,6 +39,8 @@ type Request struct {
 	SigningKeyID  string
 	WindowsIcon   string
 	LinuxIcon     string
+	MacOSIcon     string
+	BundleID      string
 }
 
 // Result describes a staged portable directory.
@@ -129,6 +132,9 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	}
 	if err := validateRuntime(request.Runtime, request.TargetOS, request.TargetArch, request.Terminal); err != nil {
 		return Result{}, err
+	}
+	if request.TargetOS == "macos" {
+		return buildMacOS(ctx, request)
 	}
 
 	name := artifactName(request.ProjectName, request.ProjectID)
@@ -327,6 +333,12 @@ func validateRuntime(value runtimepkg.Runtime, osName, arch string, terminal boo
 		}
 		if err := linuxpkg.ValidateELFAMD64(value.BinaryPath); err != nil {
 			return portableError(ErrorInvalid, "validate Linux runtime ELF", value.BinaryPath, err)
+		}
+	}
+	if goruntime.GOOS == "darwin" && osName == "macos" &&
+		value.Metadata.FormatVersion == runtimepkg.CurrentMetadataVersion {
+		if err := macospkg.ValidateMachO(value.BinaryPath, arch); err != nil {
+			return portableError(ErrorInvalid, "validate macOS runtime Mach-O", value.BinaryPath, err)
 		}
 	}
 	return nil

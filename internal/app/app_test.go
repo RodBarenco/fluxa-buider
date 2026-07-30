@@ -274,13 +274,17 @@ icon = "aplicação.ico"
 		t.Fatalf("Run(build) stderr = %q, want empty", stderr.String())
 	}
 	targetOutput := filepath.Join(root, "dist", targetDirectoryName(targetOS, runtime.GOARCH))
-	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test")); err != nil {
+	artifactName := "cli-test"
+	if targetOS == "macos" {
+		artifactName += ".app"
+	}
+	if _, err := os.Stat(filepath.Join(targetOutput, artifactName)); err != nil {
 		t.Fatalf("portable output missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension)); err != nil {
+	if _, err := os.Stat(filepath.Join(targetOutput, artifactName+archiveExtension)); err != nil {
 		t.Fatalf("distribution archive missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension+".sha256")); err != nil {
+	if _, err := os.Stat(filepath.Join(targetOutput, artifactName+archiveExtension+".sha256")); err != nil {
 		t.Fatalf("archive checksum missing: %v", err)
 	}
 	if targetOS == "windows" {
@@ -291,7 +295,10 @@ icon = "aplicação.ico"
 			t.Fatalf("Windows version metadata missing: %v", err)
 		}
 	}
-	publishedPackage := filepath.Join(targetOutput, "cli-test", "cli-test.flxpkg")
+	publishedPackage := filepath.Join(targetOutput, artifactName, "cli-test.flxpkg")
+	if targetOS == "macos" {
+		publishedPackage = filepath.Join(targetOutput, artifactName, "Contents", "Resources", "cli-test.flxpkg")
+	}
 	publishedSignature := publishedPackage + ".sig"
 	if _, err := signing.Verify(publishedPackage, publishedSignature, publicKeyPath); err != nil {
 		t.Fatalf("published signature invalid: %v", err)

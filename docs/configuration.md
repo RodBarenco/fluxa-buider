@@ -101,6 +101,11 @@ directory as read-only and runtimes must use the XDG Base Directory locations
 for writable configuration, data, state, logs, and cache. The runtime binary,
 not the Builder, determines the glibc compatibility baseline.
 
+macOS supports thin `macos-x64` and `macos-arm64` `.app` bundles. The optional
+icon must be a valid ICNS container. `targets.macos.bundle_id` defaults to
+`project.id`; universal binaries, Apple code signing, and notarization are
+future distribution stages.
+
 The initial package formats accepted by configuration are `portable` and `zip`.
 Only `portable` is part of the first functional milestone.
 

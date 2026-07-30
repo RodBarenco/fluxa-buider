@@ -341,11 +341,15 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	} else {
 		windowsIcon := ""
 		linuxIcon := ""
+		macOSIcon := ""
 		if packageManifest.Target.OS == "windows" && cfg.Targets.Windows.Icon != "" {
 			windowsIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.Windows.Icon))
 		}
 		if packageManifest.Target.OS == "linux" && cfg.Targets.Linux.Icon != "" {
 			linuxIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.Linux.Icon))
+		}
+		if packageManifest.Target.OS == "macos" && cfg.Targets.MacOS.Icon != "" {
+			macOSIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.MacOS.Icon))
 		}
 		portableResult, err = dependencies.buildPortable(context.Background(), portable.Request{
 			OutputRoot:    targetStage,
@@ -364,6 +368,8 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			SigningKeyID:  signatureResult.KeyID,
 			WindowsIcon:   windowsIcon,
 			LinuxIcon:     linuxIcon,
+			MacOSIcon:     macOSIcon,
+			BundleID:      cfg.Targets.MacOS.BundleID,
 		})
 		if err != nil {
 			_ = workspace.Cleanup()

@@ -95,11 +95,16 @@ func Archive(ctx context.Context, portable Result, targetOS string) (ArchiveResu
 }
 
 type archiveEntry struct {
-	path string
-	mode os.FileMode
+	path      string
+	relative  string
+	mode      os.FileMode
+	directory bool
 }
 
 func archiveEntries(portable Result) ([]archiveEntry, error) {
+	if portable.TargetOS == "macos" {
+		return macOSArchiveEntries(portable)
+	}
 	info, err := os.Lstat(portable.Directory)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, portableError(ErrorInvalid, "inspect portable directory", portable.Directory, errors.New("must be a non-symlink directory"))
@@ -148,7 +153,7 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 		if portable.TargetOS != "windows" && path == portable.Executable {
 			mode = 0o700
 		}
-		entries = append(entries, archiveEntry{path: path, mode: mode})
+		entries = append(entries, archiveEntry{path: path, relative: filepath.Base(path), mode: mode})
 	}
 	for name, found := range expected {
 		if !found {
@@ -156,9 +161,81 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		return filepath.Base(entries[i].path) < filepath.Base(entries[j].path)
+		return entries[i].relative < entries[j].relative
 	})
 	return entries, nil
+}
+
+func macOSArchiveEntries(result Result) ([]archiveEntry, error) {
+	expected := map[string]bool{
+		"Contents":           false,
+		"Contents/MacOS":     false,
+		"Contents/Resources": false,
+		relativeBundlePath(result.Directory, result.Executable): false,
+		relativeBundlePath(result.Directory, result.Package):    false,
+		relativeBundlePath(result.Directory, result.BuildInfo):  false,
+	}
+	if result.Signature != "" {
+		expected[relativeBundlePath(result.Directory, result.Signature)] = false
+	}
+	for _, extra := range result.ExtraFiles {
+		expected[relativeBundlePath(result.Directory, extra)] = false
+	}
+	entries := make([]archiveEntry, 0, len(expected))
+	err := filepath.WalkDir(result.Directory, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == result.Directory {
+			return nil
+		}
+		relative, err := filepath.Rel(result.Directory, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if _, ok := expected[relative]; !ok {
+			return fmt.Errorf("unexpected bundle entry %q", relative)
+		}
+		expected[relative] = true
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("bundle entries must not be symlinks")
+		}
+		mode := os.FileMode(0o600)
+		if entry.IsDir() {
+			mode = 0o755
+		} else if path == result.Executable {
+			mode = 0o700
+		} else if !info.Mode().IsRegular() {
+			return errors.New("bundle entries must be directories or regular files")
+		}
+		entries = append(entries, archiveEntry{
+			path: path, relative: relative, mode: mode, directory: entry.IsDir(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, portableError(ErrorInvalid, "validate macOS bundle", result.Directory, err)
+	}
+	for path, found := range expected {
+		if !found {
+			return nil, portableError(ErrorInvalid, "validate macOS bundle", path, errors.New("required entry is missing"))
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].relative < entries[j].relative })
+	return entries, nil
+}
+
+func relativeBundlePath(root, path string) string {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(relative)
 }
 
 func writeZIP(ctx context.Context, output io.Writer, root string, entries []archiveEntry) error {
@@ -173,9 +250,16 @@ func writeZIP(ctx context.Context, output io.Writer, root string, entries []arch
 		if err := ctx.Err(); err != nil {
 			return portableError(ErrorCanceled, "write ZIP", entry.path, err)
 		}
+		name := root + "/" + entry.relative
+		if entry.directory {
+			name += "/"
+		}
 		header := &zip.FileHeader{
-			Name:   root + "/" + filepath.Base(entry.path),
+			Name:   name,
 			Method: zip.Deflate,
+		}
+		if entry.directory {
+			header.Method = zip.Store
 		}
 		header.SetMode(entry.mode)
 		header.Modified = normalizedZIPTime
@@ -183,8 +267,10 @@ func writeZIP(ctx context.Context, output io.Writer, root string, entries []arch
 		if err != nil {
 			return portableError(ErrorIO, "create ZIP entry", entry.path, err)
 		}
-		if err := copyArchiveFile(ctx, destination, entry.path); err != nil {
-			return err
+		if !entry.directory {
+			if err := copyArchiveFile(ctx, destination, entry.path); err != nil {
+				return err
+			}
 		}
 	}
 	if err := writer.Close(); err != nil {
@@ -211,20 +297,30 @@ func writeTarGZ(ctx context.Context, output io.Writer, root string, entries []ar
 		if err := ctx.Err(); err != nil {
 			return portableError(ErrorCanceled, "write tar.gz", entry.path, err)
 		}
-		info, err := os.Stat(entry.path)
-		if err != nil {
-			return portableError(ErrorIO, "inspect tar input", entry.path, err)
+		size := int64(0)
+		entryType := byte(tar.TypeDir)
+		name := root + "/" + entry.relative + "/"
+		if !entry.directory {
+			info, err := os.Stat(entry.path)
+			if err != nil {
+				return portableError(ErrorIO, "inspect tar input", entry.path, err)
+			}
+			size = info.Size()
+			entryType = tar.TypeReg
+			name = root + "/" + entry.relative
 		}
 		header := &tar.Header{
-			Name: root + "/" + filepath.Base(entry.path), Size: info.Size(),
-			Mode: int64(entry.mode), Typeflag: tar.TypeReg,
+			Name: name, Size: size,
+			Mode: int64(entry.mode), Typeflag: entryType,
 			ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX,
 		}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return portableError(ErrorIO, "create tar entry", entry.path, err)
 		}
-		if err := copyArchiveFile(ctx, tarWriter, entry.path); err != nil {
-			return err
+		if !entry.directory {
+			if err := copyArchiveFile(ctx, tarWriter, entry.path); err != nil {
+				return err
+			}
 		}
 	}
 	if err := errors.Join(tarWriter.Close(), gzipWriter.Close()); err != nil {
