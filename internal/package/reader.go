@@ -10,9 +10,102 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 )
+
+// Extract verifies an FLXPKG and materializes its entries below destination.
+// The destination must be an existing, empty, non-symlink directory.
+func Extract(path, destination string) (Info, error) {
+	info, err := Verify(path)
+	if err != nil {
+		return Info{}, err
+	}
+	root, err := filepath.Abs(destination)
+	if err != nil {
+		return Info{}, packageError(ErrorInvalid, "resolve extraction directory", destination, err)
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return Info{}, packageError(ErrorInvalid, "validate extraction directory", root,
+			errors.New("must be an existing non-symlink directory"))
+	}
+	children, err := os.ReadDir(root)
+	if err != nil {
+		return Info{}, packageError(ErrorIO, "read extraction directory", root, err)
+	}
+	if len(children) != 0 {
+		return Info{}, packageError(ErrorInvalid, "validate extraction directory", root,
+			errors.New("directory must be empty"))
+	}
+
+	file, err := os.Open(path) // #nosec G304 -- Verify accepted this exact regular package.
+	if err != nil {
+		return Info{}, packageError(ErrorIO, "open for extraction", path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	var header packageHeader
+	if err := binary.Read(io.NewSectionReader(file, 0, int64(headerSize)), binary.LittleEndian, &header); err != nil {
+		return Info{}, packageError(ErrorInvalid, "read extraction header", path, err)
+	}
+	entries, err := readTable(file, header, info.Manifest)
+	if err != nil {
+		return Info{}, err
+	}
+	for _, entry := range entries {
+		target := filepath.Join(root, filepath.FromSlash(entry.Path))
+		relative, relErr := filepath.Rel(root, target)
+		if relErr != nil || relative == ".." || filepath.IsAbs(relative) {
+			return Info{}, packageError(ErrorInvalid, "resolve extraction path", entry.Path,
+				errors.New("entry escapes extraction directory"))
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return Info{}, packageError(ErrorIO, "create extraction directory", entry.Path, err)
+		}
+		if err := extractEntry(file, entry, target); err != nil {
+			return Info{}, err
+		}
+	}
+	return info, nil
+}
+
+func extractEntry(file io.ReaderAt, entry tableEntry, target string) error {
+	section := io.NewSectionReader(file, int64(entry.Offset), int64(entry.StoredSize)) // #nosec G115 -- verified package bounds.
+	var reader io.Reader = section
+	var compressed io.Closer
+	if entry.Compression == compressionZlib {
+		zlibReader, err := zlib.NewReader(section)
+		if err != nil {
+			return packageError(ErrorInvalid, "open compressed entry", entry.Path, err)
+		}
+		compressed = zlibReader
+		reader = zlibReader
+	}
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- target is confined above.
+	if err != nil {
+		return packageError(ErrorIO, "create extracted entry", entry.Path, err)
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(reader, int64(entry.OriginalSize)+1)) // #nosec G115 -- verified size bound.
+	closeErr := output.Close()
+	compressedCloseErr := error(nil)
+	if compressed != nil {
+		compressedCloseErr = compressed.Close()
+	}
+	if copyErr != nil || closeErr != nil || compressedCloseErr != nil {
+		_ = os.Remove(target)
+		return packageError(ErrorIO, "extract entry", entry.Path, errors.Join(copyErr, closeErr, compressedCloseErr))
+	}
+	if written < 0 || uint64(written) != entry.OriginalSize ||
+		hex.EncodeToString(hash.Sum(nil)) != hex.EncodeToString(entry.Hash[:]) {
+		_ = os.Remove(target)
+		return packageError(ErrorIntegrity, "verify extracted entry", entry.Path,
+			errors.New("extracted size or SHA-256 mismatch"))
+	}
+	return nil
+}
 
 // EntryInfo is verified metadata from the package file table.
 type EntryInfo struct {

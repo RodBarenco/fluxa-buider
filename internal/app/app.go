@@ -21,6 +21,7 @@ import (
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
+	"github.com/RodBarenco/fluxa-builder/internal/runner"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/signing"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
@@ -50,6 +51,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "runtime":
 		return runRuntime(args[1:], stdout, stderr)
+	case "run-package":
+		return runPackage(args[1:], stdout, stderr)
 	case "version":
 		if len(args) != 1 {
 			writeString(stderr, "error: version does not accept arguments\n")
@@ -87,12 +90,31 @@ Usage:
                         [--sign-key <path>] [--embed] [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
   fluxa-builder verify <file.flxpkg> [--signature <file.sig> --public-key <signing.pub>]
+  fluxa-builder run-package <file.flxpkg> --fluxa <path>
   fluxa-builder runtime list [--registry <path>]
   fluxa-builder runtime add <binary> --metadata <runtime.json> [--registry <path>]
   fluxa-builder version
   fluxa-builder help
 `, Version)
 	return err
+}
+
+func runPackage(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 3 || args[1] != "--fluxa" || args[0] == "" || args[2] == "" {
+		writeString(stderr, "error: usage: fluxa-builder run-package <file.flxpkg> --fluxa <path>\n")
+		return 2
+	}
+	if err := runner.Run(context.Background(), runner.Request{
+		PackagePath: args[0],
+		RuntimePath: args[2],
+		Stdin:       os.Stdin,
+		Stdout:      stdout,
+		Stderr:      stderr,
+	}); err != nil {
+		_, _ = fmt.Fprintf(stderr, "error: failed to run Fluxa package\ncaused by: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func writeString(w io.Writer, value string) {

@@ -62,6 +62,58 @@ func TestWriteAndVerifyMinimalCompressedAndUncompressed(t *testing.T) {
 	}
 }
 
+func TestExtractMaterializesVerifiedEntries(t *testing.T) {
+	for _, compress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "compressed"}[compress], func(t *testing.T) {
+			root := t.TempDir()
+			programData := []byte("import static game\n")
+			assetData := []byte{0, 1, 2, 3, 4}
+			programSource := writePackageSource(t, root, "main.flx", programData)
+			assetSource := writePackageSource(t, root, "image.bin", assetData)
+			program := manifestFile("program/source/main.flx", "main.flx", "program", programSource)
+			asset := manifestFile("resources/assets/image.bin", "assets/image.bin", "asset", assetSource)
+			output := filepath.Join(root, "app.flxpkg")
+			if _, err := Write(context.Background(), Request{
+				OutputPath: output,
+				Manifest:   baseManifest([]manifest.File{program, asset}),
+				Sources:    map[string]string{program.Path: programSource, asset.Path: assetSource},
+				Compress:   compress,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			destination := filepath.Join(root, "extracted")
+			if err := os.Mkdir(destination, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			info, err := Extract(output, destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(info.Entries) != 2 {
+				t.Fatalf("entries = %d, want 2", len(info.Entries))
+			}
+			assertFileBytes(t, filepath.Join(destination, "program", "source", "main.flx"), programData)
+			assertFileBytes(t, filepath.Join(destination, "resources", "assets", "image.bin"), assetData)
+		})
+	}
+}
+
+func TestExtractRejectsNonEmptyDestination(t *testing.T) {
+	root := t.TempDir()
+	output := createTwoFilePackage(t, root)
+	destination := filepath.Join(root, "extracted")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "owned"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(output, destination); err == nil {
+		t.Fatal("Extract() accepted a non-empty destination")
+	}
+}
+
 func TestMultipleAndLargeFiles(t *testing.T) {
 	root := t.TempDir()
 	largeData := bytes.Repeat([]byte("Fluxa deterministic payload\n"), 100_000)
@@ -96,6 +148,17 @@ func TestMultipleAndLargeFiles(t *testing.T) {
 	}
 	if len(info.Entries) != 3 || info.Entries[1].OriginalSize != uint64(len(largeData)) {
 		t.Fatalf("entries = %#v", info.Entries)
+	}
+}
+
+func assertFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path) // #nosec G304 -- test-owned path.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s = %q, want %q", path, got, want)
 	}
 }
 
