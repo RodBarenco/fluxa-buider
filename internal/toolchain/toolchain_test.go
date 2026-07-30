@@ -86,8 +86,9 @@ func TestResolveOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if got.Path != tt.want {
-				t.Errorf("Resolve() path = %q, want %q", got.Path, tt.want)
+			want := canonicalPath(t, tt.want)
+			if got.Path != want {
+				t.Errorf("Resolve() path = %q, want %q", got.Path, want)
 			}
 		})
 	}
@@ -106,6 +107,7 @@ func TestResolveRelativeConfigPathAgainstProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
+	want = canonicalPath(t, want)
 	if got.Path != want {
 		t.Errorf("Resolve() path = %q, want %q", got.Path, want)
 	}
@@ -121,6 +123,7 @@ func TestResolvePathWithSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
+	want = canonicalPath(t, want)
 	if got.Path != want {
 		t.Errorf("Resolve() path = %q, want %q", got.Path, want)
 	}
@@ -136,6 +139,7 @@ func TestResolveFluxaHomeExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
+	want = canonicalPath(t, want)
 	if got.Path != want {
 		t.Errorf("Resolve() path = %q, want %q", got.Path, want)
 	}
@@ -316,6 +320,15 @@ func fakeExecutable(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	return absolute
+}
+
+func canonicalPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(resolved)
 }
 
 func executableName() string {

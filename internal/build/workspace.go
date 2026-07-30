@@ -204,7 +204,15 @@ func (w *Workspace) Publish(ctx context.Context, source, destination string) err
 			Err:       err,
 		}
 	}
-	absoluteDestination = filepath.Clean(absoluteDestination)
+	absoluteDestination, err = canonicalPathWithMissingLeaf(absoluteDestination)
+	if err != nil {
+		return &Error{
+			Kind:      ErrorUnsafePath,
+			Operation: "resolve publish destination in",
+			Path:      destination,
+			Err:       err,
+		}
+	}
 	controlDir := filepath.Join(w.projectRoot, ".fluxa-builder")
 	if !pathWithin(w.projectRoot, absoluteDestination) ||
 		pathWithin(controlDir, absoluteDestination) {
@@ -288,6 +296,37 @@ func canonicalDirectory(path string) (string, error) {
 		return "", &Error{Kind: ErrorUnsafePath, Operation: "validate", Path: resolved, Err: err}
 	}
 	return filepath.Clean(resolved), nil
+}
+
+// canonicalPathWithMissingLeaf resolves aliases in the existing portion of a
+// path and then appends components that do not exist yet. This keeps security
+// comparisons in one namespace on systems such as macOS, where /var aliases
+// /private/var.
+func canonicalPathWithMissingLeaf(path string) (string, error) {
+	current := filepath.Clean(path)
+	var missing []string
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func ensurePrivateDirectory(path string) error {

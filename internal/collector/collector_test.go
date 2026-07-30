@@ -102,8 +102,19 @@ func TestCollectRejectsCaseCollision(t *testing.T) {
 	writeFile(t, root, "main.flx", "main")
 	writeFile(t, root, "assets/Icon.png", "one")
 	writeFile(t, root, "assets/icon.png", "two")
+	upperInfo, err := os.Stat(filepath.Join(root, "assets", "Icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowerInfo, err := os.Stat(filepath.Join(root, "assets", "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(upperInfo, lowerInfo) {
+		t.Skip("filesystem is case-insensitive and cannot represent a case collision")
+	}
 
-	_, err := collector.Collect(context.Background(), collector.Options{
+	_, err = collector.Collect(context.Background(), collector.Options{
 		Root: root, Entry: "main.flx", AssetPatterns: []string{"assets/**"},
 	})
 	assertKind(t, err, collector.ErrorCollision)

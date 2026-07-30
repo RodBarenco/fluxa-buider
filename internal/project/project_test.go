@@ -27,6 +27,7 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
+	root = canonicalPath(t, root)
 	if cfg.Root != root {
 		t.Errorf("Root = %q, want %q", cfg.Root, root)
 	}
@@ -134,6 +135,7 @@ func TestLoadProjectPathsWithSpacesAndUnicode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	root = canonicalPath(t, root)
 	if cfg.Root != root {
 		t.Errorf("Root = %q, want %q", cfg.Root, root)
 	}
@@ -347,4 +349,13 @@ func mustWriteFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func canonicalPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(resolved)
 }

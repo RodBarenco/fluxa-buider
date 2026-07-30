@@ -285,10 +285,13 @@ func ensureRegistryRoot(root string) (string, error) {
 		return "", runtimeError(ErrorInvalid, "validate registry", absolute, errors.New("registry root must be a non-symlink directory"))
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
-	if err != nil || filepath.Clean(resolved) != filepath.Clean(absolute) {
-		return "", runtimeError(ErrorInvalid, "validate registry", absolute, errors.New("registry path must not traverse symlinks"))
+	if err != nil {
+		return "", runtimeError(ErrorInvalid, "validate registry", absolute, errors.New("registry path cannot be resolved"))
 	}
-	return filepath.Clean(absolute), nil
+	// The root itself must be a real directory (checked with Lstat above), but
+	// an ancestor may be a system alias. macOS exposes /var through
+	// /private/var, including the directory used by testing.TempDir.
+	return filepath.Clean(resolved), nil
 }
 
 func ensureRegistryDirectory(path string) error {
