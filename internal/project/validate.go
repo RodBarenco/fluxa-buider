@@ -66,6 +66,19 @@ func validate(cfg *Config) error {
 	if err := validatePatterns("build.persistent", cfg.Build.Persistent); err != nil {
 		return err
 	}
+	if err := validatePatterns("build.export", cfg.Build.Exported); err != nil {
+		return err
+	}
+	persistent := make(map[string]struct{}, len(cfg.Build.Persistent))
+	for _, pattern := range cfg.Build.Persistent {
+		persistent[pattern] = struct{}{}
+	}
+	for index, pattern := range cfg.Build.Exported {
+		if _, ok := persistent[pattern]; !ok {
+			return validationError(fmt.Sprintf("build.export[%d]", index), pattern,
+				"must also appear exactly in build.persistent")
+		}
+	}
 
 	if cfg.Package.Format != "portable" && cfg.Package.Format != "zip" {
 		return validationError("package.format", cfg.Package.Format, "must be portable or zip")

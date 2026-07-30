@@ -50,6 +50,7 @@ type BuildConfig struct {
 	Assets     []string `toml:"assets"`
 	Exclude    []string `toml:"exclude"`
 	Persistent []string `toml:"persistent"`
+	Exported   []string `toml:"export"`
 
 	terminal *bool
 }
@@ -91,6 +92,9 @@ func (c *BuildConfig) UnmarshalTOML(data any) error {
 		return err
 	}
 	if c.Persistent, err = stringSlice(raw, "persistent"); err != nil {
+		return err
+	}
+	if c.Exported, err = stringSlice(raw, "export"); err != nil {
 		return err
 	}
 	return nil

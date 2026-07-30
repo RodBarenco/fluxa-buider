@@ -68,6 +68,7 @@ type Build struct {
 	Debug         bool     `json:"debug"`
 	SourceExposed bool     `json:"source_exposed"`
 	Persistent    []string `json:"persistent,omitempty"`
+	Exported      []string `json:"export,omitempty"`
 }
 
 // File maps a package path to the logical path used by the Fluxa project.
@@ -158,6 +159,7 @@ func New(ctx context.Context, input Input) (Manifest, error) {
 			Debug:         input.Compilation.Debug,
 			SourceExposed: input.Compilation.SourceExposed,
 			Persistent:    append([]string(nil), input.Project.Build.Persistent...),
+			Exported:      append([]string(nil), input.Project.Build.Exported...),
 		},
 		Files: files,
 	}
@@ -209,14 +211,29 @@ func Validate(value Manifest) error {
 	if len(value.Files) > maxFiles {
 		return manifestError(ErrorInvalid, "validate", "files", fmt.Errorf("exceeds maximum of %d files", maxFiles))
 	}
-	for index, pattern := range value.Build.Persistent {
-		if pattern == "" || strings.HasPrefix(pattern, "/") || strings.Contains(pattern, `\`) ||
-			strings.Contains(pattern, "..") {
-			return manifestError(ErrorInvalid, "validate", fmt.Sprintf("build.persistent[%d]", index),
-				errors.New("must be a safe project-relative slash pattern"))
+	for field, patterns := range map[string][]string{
+		"build.persistent": value.Build.Persistent,
+		"build.export":     value.Build.Exported,
+	} {
+		for index, pattern := range patterns {
+			if pattern == "" || strings.HasPrefix(pattern, "/") || strings.Contains(pattern, `\`) ||
+				strings.Contains(pattern, "..") || strings.HasSuffix(strings.ToLower(pattern), ".flx") {
+				return manifestError(ErrorInvalid, "validate", fmt.Sprintf("%s[%d]", field, index),
+					errors.New("must be a safe non-source project-relative slash pattern"))
+			}
+			if _, err := filepath.Match(pattern, "validation-probe"); err != nil {
+				return manifestError(ErrorInvalid, "validate", fmt.Sprintf("%s[%d]", field, index), err)
+			}
 		}
-		if _, err := filepath.Match(pattern, "validation-probe"); err != nil {
-			return manifestError(ErrorInvalid, "validate", fmt.Sprintf("build.persistent[%d]", index), err)
+	}
+	persistent := make(map[string]struct{}, len(value.Build.Persistent))
+	for _, pattern := range value.Build.Persistent {
+		persistent[pattern] = struct{}{}
+	}
+	for index, pattern := range value.Build.Exported {
+		if _, ok := persistent[pattern]; !ok {
+			return manifestError(ErrorInvalid, "validate", fmt.Sprintf("build.export[%d]", index),
+				errors.New("must also appear exactly in build.persistent"))
 		}
 	}
 

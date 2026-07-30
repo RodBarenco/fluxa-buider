@@ -105,11 +105,12 @@ func runPackage(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := runner.Run(context.Background(), runner.Request{
-		PackagePath: args[0],
-		RuntimePath: args[2],
-		Stdin:       os.Stdin,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		PackagePath:     args[0],
+		RuntimePath:     args[2],
+		DistributionDir: filepath.Dir(args[0]),
+		Stdin:           os.Stdin,
+		Stdout:          stdout,
+		Stderr:          stderr,
 	}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "error: failed to run Fluxa package\ncaused by: %v\n", err)
 		return 1

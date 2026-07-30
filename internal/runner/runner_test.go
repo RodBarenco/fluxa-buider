@@ -72,7 +72,8 @@ func TestRunPreservesDeclaredDataBetweenExecutions(t *testing.T) {
 		Target: manifest.Target{OS: "linux", Arch: "amd64"},
 		Build: manifest.Build{
 			Preflight: "not_run", ProgramFormat: "fluxa-source",
-			Debug: true, SourceExposed: true, Persistent: []string{"nave.db", "cards/**"},
+			Debug: true, SourceExposed: true,
+			Persistent: []string{"nave.db", "cards/**"}, Exported: []string{"cards/**"},
 		},
 		Files: files,
 	}
@@ -84,7 +85,11 @@ func TestRunPreservesDeclaredDataBetweenExecutions(t *testing.T) {
 	}
 	request := Request{
 		PackagePath: packagePath, RuntimePath: runtimePath,
-		Stdin: nil, Stdout: os.Stdout, Stderr: os.Stderr,
+		DistributionDir: filepath.Join(root, "distribution"),
+		Stdin:           nil, Stdout: os.Stdout, Stderr: os.Stderr,
+	}
+	if err := os.Mkdir(request.DistributionDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	if err := Run(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -94,6 +99,10 @@ func TestRunPreservesDeclaredDataBetweenExecutions(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatal("second execution did not observe the saved database and generated card")
+	}
+	exported := filepath.Join(request.DistributionDir, "cards", "new-card.qoi")
+	if data, err := os.ReadFile(exported); err != nil || string(data) != "card" { // #nosec G304 -- test-owned path.
+		t.Fatalf("exported card = %q, %v", data, err)
 	}
 }
 

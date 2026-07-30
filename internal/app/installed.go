@@ -56,11 +56,12 @@ func RunInstalled(executable string, args []string, stdin io.Reader, stdout, std
 		runtimeName += ".exe"
 	}
 	if err := runner.Run(context.Background(), runner.Request{
-		PackagePath: packagePath,
-		RuntimePath: filepath.Join(directory, runtimeName),
-		Stdin:       stdin,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		PackagePath:     packagePath,
+		RuntimePath:     filepath.Join(directory, runtimeName),
+		DistributionDir: directory,
+		Stdin:           stdin,
+		Stdout:          stdout,
+		Stderr:          stderr,
 	}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "Fluxa application error: %v\n", err)
 		return 1
