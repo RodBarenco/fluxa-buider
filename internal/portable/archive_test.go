@@ -6,7 +6,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -62,6 +64,18 @@ func TestZIPArchiveIsReproducibleAndPreservesContentAndModes(t *testing.T) {
 	extracted := t.TempDir()
 	extractZIP(t, first.archive.Path, extracted)
 	assertExtractedMatches(t, first.portable, filepath.Join(extracted, first.portable.Name))
+	metadataData, err := os.ReadFile(filepath.Join(extracted, first.portable.Name, "windows-version.json")) // #nosec G304 -- safe test extraction root.
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["file_version"] != "1.0.0" || metadata["architecture"] != "amd64" ||
+		metadata["icon"] != first.portable.Name+".ico" {
+		t.Fatalf("Windows version metadata = %#v", metadata)
+	}
 	archive, err := zip.OpenReader(first.archive.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +148,26 @@ func buildAndArchive(t *testing.T, targetOS string) archivedFixture {
 	fixture := newFixture(t, "Archive Game", true)
 	fixture.request.TargetOS = targetOS
 	fixture.request.Runtime.Metadata.OS = targetOS
+	if targetOS == "windows" {
+		iconPath := filepath.Join(t.TempDir(), "aplicação.ico")
+		if err := os.WriteFile(iconPath, archiveTestICO(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fixture.request.WindowsIcon = iconPath
+	}
+	if targetOS == "windows" && goruntime.GOOS == "windows" {
+		runtimePath, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(runtimePath) // #nosec G304 -- current test executable.
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(data)
+		fixture.request.Runtime.BinaryPath = runtimePath
+		fixture.request.Runtime.Metadata.BinarySHA256 = hex.EncodeToString(digest[:])
+	}
 	result, err := portable.Build(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +177,20 @@ func buildAndArchive(t *testing.T, targetOS string) archivedFixture {
 		t.Fatal(err)
 	}
 	return archivedFixture{portable: result, archive: archive}
+}
+
+func archiveTestICO() []byte {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	data := make([]byte, 22+len(png))
+	binary.LittleEndian.PutUint16(data[2:4], 1)
+	binary.LittleEndian.PutUint16(data[4:6], 1)
+	data[6], data[7] = 16, 16
+	binary.LittleEndian.PutUint16(data[10:12], 1)
+	binary.LittleEndian.PutUint16(data[12:14], 32)
+	binary.LittleEndian.PutUint32(data[14:18], 8)
+	binary.LittleEndian.PutUint32(data[18:22], 22)
+	copy(data[22:], png)
+	return data
 }
 
 func assertChecksum(t *testing.T, result portable.ArchiveResult) {

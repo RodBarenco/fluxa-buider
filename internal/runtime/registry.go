@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
+
+	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
 )
 
 const metadataFilename = "runtime.json"
@@ -66,6 +68,11 @@ func Add(root, binaryPath string, metadata Metadata) (Runtime, error) {
 	}
 	if goruntime.GOOS != "windows" && metadata.OS != "windows" && sourceInfo.Mode().Perm()&0o111 == 0 {
 		return Runtime{}, runtimeError(ErrorPermission, "validate binary", binaryPath, errors.New("binary is not executable"))
+	}
+	if goruntime.GOOS == "windows" && metadata.OS == "windows" {
+		if err := windowspkg.ValidatePEAMD64(binaryPath); err != nil {
+			return Runtime{}, runtimeError(ErrorInvalid, "validate Windows runtime PE", binaryPath, err)
+		}
 	}
 	actualHash, err := hashRuntimeFile(binaryPath)
 	if err != nil {
@@ -158,6 +165,11 @@ func Load(directory string) (Runtime, error) {
 	}
 	if goruntime.GOOS != "windows" && metadata.OS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return Runtime{}, runtimeError(ErrorPermission, "validate binary", binaryPath, errors.New("binary is not executable"))
+	}
+	if goruntime.GOOS == "windows" && metadata.OS == "windows" {
+		if err := windowspkg.ValidatePEAMD64(binaryPath); err != nil {
+			return Runtime{}, runtimeError(ErrorInvalid, "validate Windows runtime PE", binaryPath, err)
+		}
 	}
 	hash, err := hashRuntimeFile(binaryPath)
 	if err != nil {

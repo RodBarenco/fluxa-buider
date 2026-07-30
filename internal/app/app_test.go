@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -132,6 +133,9 @@ entry = "main.flx"
 
 [build]
 terminal = false
+
+[targets.windows]
+icon = "aplicação.ico"
 `
 	if err := os.WriteFile(filepath.Join(root, "fluxa.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -139,13 +143,28 @@ terminal = false
 	if err := os.WriteFile(filepath.Join(root, "main.flx"), []byte(`print("ok")`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runtimePath := filepath.Join(root, "runtime-fixture")
-	runtimeBytes := []byte("runtime fixture")
-	if err := os.WriteFile(runtimePath, runtimeBytes, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "aplicação.ico"), windowsTestICO(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(runtimePath, 0o700); err != nil { // #nosec G302 -- executable runtime fixture.
-		t.Fatal(err)
+	runtimePath := filepath.Join(root, "runtime-fixture")
+	runtimeBytes := []byte("runtime fixture")
+	if runtime.GOOS == "windows" {
+		var err error
+		runtimePath, err = os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtimeBytes, err = os.ReadFile(runtimePath) // #nosec G304 -- current test executable.
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.WriteFile(runtimePath, runtimeBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(runtimePath, 0o700); err != nil { // #nosec G302 -- executable runtime fixture.
+			t.Fatal(err)
+		}
 	}
 	runtimeHash := sha256.Sum256(runtimeBytes)
 	publicKey, privateKey, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
@@ -264,6 +283,14 @@ terminal = false
 	if _, err := os.Stat(filepath.Join(targetOutput, "cli-test"+archiveExtension+".sha256")); err != nil {
 		t.Fatalf("archive checksum missing: %v", err)
 	}
+	if targetOS == "windows" {
+		if _, err := os.Stat(filepath.Join(targetOutput, "cli-test", "cli-test.ico")); err != nil {
+			t.Fatalf("Windows icon missing: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(targetOutput, "cli-test", "windows-version.json")); err != nil {
+			t.Fatalf("Windows version metadata missing: %v", err)
+		}
+	}
 	publishedPackage := filepath.Join(targetOutput, "cli-test", "cli-test.flxpkg")
 	publishedSignature := publishedPackage + ".sig"
 	if _, err := signing.Verify(publishedPackage, publishedSignature, publicKeyPath); err != nil {
@@ -371,7 +398,8 @@ func TestResolveManifestTarget(t *testing.T) {
 		wantErr  bool
 	}{
 		{input: "linux-x64", wantOS: "linux", wantArch: "amd64"},
-		{input: "windows-arm64", wantOS: "windows", wantArch: "arm64"},
+		{input: "windows-x64", wantOS: "windows", wantArch: "amd64"},
+		{input: "windows-arm64", wantErr: true},
 		{input: "macos-x64", wantOS: "macos", wantArch: "amd64"},
 		{input: "freebsd-x64", wantErr: true},
 		{input: "linux-386", wantErr: true},
@@ -584,4 +612,18 @@ func TestParseVerifyOptions(t *testing.T) {
 			t.Fatalf("parseVerifyOptions(%q) succeeded", args)
 		}
 	}
+}
+
+func windowsTestICO() []byte {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	data := make([]byte, 22+len(png))
+	binary.LittleEndian.PutUint16(data[2:4], 1)
+	binary.LittleEndian.PutUint16(data[4:6], 1)
+	data[6], data[7] = 16, 16
+	binary.LittleEndian.PutUint16(data[10:12], 1)
+	binary.LittleEndian.PutUint16(data[12:14], 32)
+	binary.LittleEndian.PutUint32(data[14:18], 8)
+	binary.LittleEndian.PutUint32(data[18:22], 22)
+	copy(data[22:], png)
+	return data
 }

@@ -34,6 +34,10 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Windows x64 official portable integration
+        if: runner.os == 'Windows'
+        run: go test ./internal/portable -run TestWindowsX64OfficialPortablePipeline -count=1
+
       - name: Race test
         run: go test -race ./...
 

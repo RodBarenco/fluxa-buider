@@ -16,6 +16,7 @@ import (
 
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
+	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
 )
 
 // Request contains verified inputs for one portable directory.
@@ -34,6 +35,7 @@ type Request struct {
 	SignaturePath string
 	SignatureHash string
 	SigningKeyID  string
+	WindowsIcon   string
 }
 
 // Result describes a staged portable directory.
@@ -47,6 +49,7 @@ type Result struct {
 	Signature   string
 	PackageHash string
 	RuntimeHash string
+	ExtraFiles  []string
 }
 
 type buildInfo struct {
@@ -65,6 +68,23 @@ type buildInfo struct {
 	Signature     string `json:"signature,omitempty"`
 	SignatureHash string `json:"signature_sha256,omitempty"`
 	SigningKeyID  string `json:"signing_key_id,omitempty"`
+	WindowsIcon   string `json:"windows_icon,omitempty"`
+	WindowsInfo   string `json:"windows_metadata,omitempty"`
+}
+
+type windowsInfo struct {
+	FormatVersion int    `json:"format_version"`
+	ProductName   string `json:"product_name"`
+	ProjectID     string `json:"project_id"`
+	FileVersion   string `json:"file_version"`
+	Architecture  string `json:"architecture"`
+	Terminal      bool   `json:"terminal"`
+	Executable    string `json:"executable"`
+	Package       string `json:"package"`
+	RuntimeHash   string `json:"runtime_sha256"`
+	PackageHash   string `json:"package_sha256"`
+	Icon          string `json:"icon,omitempty"`
+	IconHash      string `json:"icon_sha256,omitempty"`
 }
 
 // Build assembles and verifies a private portable directory.
@@ -138,6 +158,40 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		}
 	}
 
+	extraFiles := make([]string, 0, 2)
+	windowsIconName := ""
+	windowsInfoName := ""
+	if request.TargetOS == "windows" {
+		iconHash := ""
+		if request.WindowsIcon != "" {
+			if err := windowspkg.ValidateICO(request.WindowsIcon); err != nil {
+				return Result{}, portableError(ErrorInvalid, "validate Windows icon", request.WindowsIcon, err)
+			}
+			windowsIconName = name + ".ico"
+			iconPath := filepath.Join(directory, windowsIconName)
+			iconHash, err = copyAndHash(ctx, request.WindowsIcon, iconPath, 0o600)
+			if err != nil {
+				return Result{}, err
+			}
+			if err := windowspkg.ValidateICO(iconPath); err != nil {
+				return Result{}, portableError(ErrorIntegrity, "verify copied Windows icon", iconPath, err)
+			}
+			extraFiles = append(extraFiles, iconPath)
+		}
+		windowsInfoName = "windows-version.json"
+		windowsInfoPath := filepath.Join(directory, windowsInfoName)
+		if err := writeJSONFile(windowsInfoPath, windowsInfo{
+			FormatVersion: 1, ProductName: request.ProjectName, ProjectID: request.ProjectID,
+			FileVersion: request.Version, Architecture: request.TargetArch, Terminal: request.Terminal,
+			Executable: executableName, Package: packageName,
+			RuntimeHash: runtimeHash, PackageHash: packageHash,
+			Icon: windowsIconName, IconHash: iconHash,
+		}); err != nil {
+			return Result{}, err
+		}
+		extraFiles = append(extraFiles, windowsInfoPath)
+	}
+
 	infoPath := filepath.Join(directory, "build-info.json")
 	signaturePath := ""
 	signatureName := ""
@@ -163,7 +217,8 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		PackageSHA256: packageHash, RuntimeSHA256: runtimeHash,
 		SourceExposed: request.SourceExposed,
 		Signature:     signatureName, SignatureHash: request.SignatureHash,
-		SigningKeyID: request.SigningKeyID,
+		SigningKeyID: request.SigningKeyID, WindowsIcon: windowsIconName,
+		WindowsInfo: windowsInfoName,
 	}); err != nil {
 		return Result{}, err
 	}
@@ -175,6 +230,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	if signaturePath != "" {
 		expectedEntries++
 	}
+	expectedEntries += len(extraFiles)
 	if len(entries) != expectedEntries {
 		return Result{}, portableError(ErrorInvalid, "validate directory", directory, fmt.Errorf("contains %d entries, expected %d", len(entries), expectedEntries))
 	}
@@ -183,6 +239,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		Directory: directory, Name: name, TargetOS: request.TargetOS, Executable: executablePath,
 		Package: packagePath, BuildInfo: infoPath, Signature: signaturePath,
 		PackageHash: packageHash, RuntimeHash: runtimeHash,
+		ExtraFiles: append([]string(nil), extraFiles...),
 	}, nil
 }
 
@@ -202,6 +259,11 @@ func validateRuntime(value runtimepkg.Runtime, osName, arch string, terminal boo
 	}
 	if goruntime.GOOS != "windows" && osName != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return portableError(ErrorPermission, "validate runtime", value.BinaryPath, errors.New("runtime is not executable"))
+	}
+	if goruntime.GOOS == "windows" && osName == "windows" {
+		if err := windowspkg.ValidatePEAMD64(value.BinaryPath); err != nil {
+			return portableError(ErrorInvalid, "validate Windows runtime PE", value.BinaryPath, err)
+		}
 	}
 	return nil
 }
@@ -248,13 +310,17 @@ func copyAndHash(ctx context.Context, sourcePath, destinationPath string, mode o
 }
 
 func writeBuildInfo(path string, value buildInfo) error {
+	return writeJSONFile(path, value)
+}
+
+func writeJSONFile(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		return portableError(ErrorInvalid, "encode build info", path, err)
+		return portableError(ErrorInvalid, "encode metadata", path, err)
 	}
 	data = append(data, '\n')
 	if err := os.WriteFile(path, data, 0o600); err != nil { // #nosec G304 -- confined output path.
-		return portableError(ErrorIO, "write build info", path, err)
+		return portableError(ErrorIO, "write metadata", path, err)
 	}
 	return nil
 }

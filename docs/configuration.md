@@ -176,3 +176,24 @@ The runtime must implement `--fluxa-package-self-test` and locate the package
 beside the executable. No output is published if assembly, package verification,
 runtime self-test, or atomic publication fails. Existing output is never
 overwritten.
+
+For the official `windows-x64` target, the executable uses `.exe` and the
+portable directory also contains deterministic `windows-version.json`. When
+`targets.windows.icon` is configured, it must be a structurally valid ICO and
+is copied as `<application>.ico`. Both files are included in the deterministic
+ZIP:
+
+```text
+<application>/
+├── <application>.exe
+├── <application>.flxpkg
+├── <application>.flxpkg.sig  # when signing is enabled
+├── <application>.ico         # when configured
+├── windows-version.json
+└── build-info.json
+```
+
+The Windows metadata records product name, project ID, semantic version,
+architecture, terminal mode, filenames, and verified runtime/package/icon
+hashes. PE resource editing, Authenticode code signing, and installers remain
+separate future formats; the Builder never rewrites the registered runtime PE.

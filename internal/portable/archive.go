@@ -118,6 +118,10 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 		expected[filepath.Base(portable.Signature)] = false
 		expectedCount++
 	}
+	for _, extra := range portable.ExtraFiles {
+		expected[filepath.Base(extra)] = false
+		expectedCount++
+	}
 	if len(expected) != expectedCount {
 		return nil, portableError(ErrorInvalid, "validate archive input", portable.Directory,
 			errors.New("portable result paths are missing or collide"))

@@ -339,6 +339,10 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			return 1
 		}
 	} else {
+		windowsIcon := ""
+		if packageManifest.Target.OS == "windows" && cfg.Targets.Windows.Icon != "" {
+			windowsIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.Windows.Icon))
+		}
 		portableResult, err = dependencies.buildPortable(context.Background(), portable.Request{
 			OutputRoot:    targetStage,
 			ProjectName:   cfg.Project.Name,
@@ -354,6 +358,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			SignaturePath: signatureResult.Path,
 			SignatureHash: signatureResult.SHA256,
 			SigningKeyID:  signatureResult.KeyID,
+			WindowsIcon:   windowsIcon,
 		})
 		if err != nil {
 			_ = workspace.Cleanup()
@@ -793,6 +798,9 @@ func resolveManifestTarget(configured string) (string, string, error) {
 	case "arm64":
 	default:
 		return "", "", fmt.Errorf("unsupported target architecture %q", arch)
+	}
+	if osName == "windows" && arch != "amd64" {
+		return "", "", errors.New("official Windows target currently supports x64 only")
 	}
 	return osName, arch, nil
 }
