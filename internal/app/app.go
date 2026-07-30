@@ -340,8 +340,12 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		}
 	} else {
 		windowsIcon := ""
+		linuxIcon := ""
 		if packageManifest.Target.OS == "windows" && cfg.Targets.Windows.Icon != "" {
 			windowsIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.Windows.Icon))
+		}
+		if packageManifest.Target.OS == "linux" && cfg.Targets.Linux.Icon != "" {
+			linuxIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.Linux.Icon))
 		}
 		portableResult, err = dependencies.buildPortable(context.Background(), portable.Request{
 			OutputRoot:    targetStage,
@@ -359,6 +363,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			SignatureHash: signatureResult.SHA256,
 			SigningKeyID:  signatureResult.KeyID,
 			WindowsIcon:   windowsIcon,
+			LinuxIcon:     linuxIcon,
 		})
 		if err != nil {
 			_ = workspace.Cleanup()
@@ -801,6 +806,9 @@ func resolveManifestTarget(configured string) (string, string, error) {
 	}
 	if osName == "windows" && arch != "amd64" {
 		return "", "", errors.New("official Windows target currently supports x64 only")
+	}
+	if osName == "linux" && arch != "amd64" {
+		return "", "", errors.New("official Linux target currently supports x64 only")
 	}
 	return osName, arch, nil
 }

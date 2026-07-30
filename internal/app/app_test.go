@@ -400,6 +400,7 @@ func TestResolveManifestTarget(t *testing.T) {
 		{input: "linux-x64", wantOS: "linux", wantArch: "amd64"},
 		{input: "windows-x64", wantOS: "windows", wantArch: "amd64"},
 		{input: "windows-arm64", wantErr: true},
+		{input: "linux-arm64", wantErr: true},
 		{input: "macos-x64", wantOS: "macos", wantArch: "amd64"},
 		{input: "freebsd-x64", wantErr: true},
 		{input: "linux-386", wantErr: true},

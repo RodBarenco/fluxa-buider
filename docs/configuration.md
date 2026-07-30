@@ -95,6 +95,12 @@ paths are normalized to `/`, sorted deterministically, and retained as logical
 project paths. Overlapping patterns select a file only once. Case-only
 collisions and selected symlinks that escape the project are rejected.
 
+The official Linux target is currently `linux-x64`. Its optional icon must be a
+bounded, valid PNG. Linux portable applications treat their installation
+directory as read-only and runtimes must use the XDG Base Directory locations
+for writable configuration, data, state, logs, and cache. The runtime binary,
+not the Builder, determines the glibc compatibility baseline.
+
 The initial package formats accepted by configuration are `portable` and `zip`.
 Only `portable` is part of the first functional milestone.
 

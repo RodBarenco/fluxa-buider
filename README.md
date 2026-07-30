@@ -61,7 +61,14 @@ golangci-lint run
 ```
 
 The CI runs tests, the race detector, vet, build, and a version smoke test on
-Linux, Windows, and macOS.
+Linux, Windows, and macOS. Native release gates additionally execute the
+official Windows x64 and Linux x64 portable pipelines.
+
+The Linux portable layout is distributed as a deterministic tar.gz. It supports
+an optional validated PNG icon and treats the installation directory as
+read-only. Fluxa runtimes must store writable data through the XDG Base
+Directory locations. glibc compatibility follows the selected runtime binary;
+the Builder does not relink or rewrite it.
 
 ## Scope
 

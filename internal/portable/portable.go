@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode"
 
+	linuxpkg "github.com/RodBarenco/fluxa-builder/internal/linux"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
@@ -36,6 +37,7 @@ type Request struct {
 	SignatureHash string
 	SigningKeyID  string
 	WindowsIcon   string
+	LinuxIcon     string
 }
 
 // Result describes a staged portable directory.
@@ -70,6 +72,8 @@ type buildInfo struct {
 	SigningKeyID  string `json:"signing_key_id,omitempty"`
 	WindowsIcon   string `json:"windows_icon,omitempty"`
 	WindowsInfo   string `json:"windows_metadata,omitempty"`
+	LinuxIcon     string `json:"linux_icon,omitempty"`
+	LinuxInfo     string `json:"linux_metadata,omitempty"`
 }
 
 type windowsInfo struct {
@@ -85,6 +89,22 @@ type windowsInfo struct {
 	PackageHash   string `json:"package_sha256"`
 	Icon          string `json:"icon,omitempty"`
 	IconHash      string `json:"icon_sha256,omitempty"`
+}
+
+type linuxInfo struct {
+	FormatVersion int    `json:"format_version"`
+	ProductName   string `json:"product_name"`
+	ProjectID     string `json:"project_id"`
+	Version       string `json:"version"`
+	Architecture  string `json:"architecture"`
+	Executable    string `json:"executable"`
+	Package       string `json:"package"`
+	RuntimeHash   string `json:"runtime_sha256"`
+	PackageHash   string `json:"package_sha256"`
+	Icon          string `json:"icon,omitempty"`
+	IconHash      string `json:"icon_sha256,omitempty"`
+	DataPolicy    string `json:"data_policy"`
+	LibcPolicy    string `json:"libc_policy"`
 }
 
 // Build assembles and verifies a private portable directory.
@@ -161,6 +181,8 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	extraFiles := make([]string, 0, 2)
 	windowsIconName := ""
 	windowsInfoName := ""
+	linuxIconName := ""
+	linuxInfoName := ""
 	if request.TargetOS == "windows" {
 		iconHash := ""
 		if request.WindowsIcon != "" {
@@ -191,6 +213,37 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		}
 		extraFiles = append(extraFiles, windowsInfoPath)
 	}
+	if request.TargetOS == "linux" {
+		iconHash := ""
+		if request.LinuxIcon != "" {
+			if err := linuxpkg.ValidatePNG(request.LinuxIcon); err != nil {
+				return Result{}, portableError(ErrorInvalid, "validate Linux icon", request.LinuxIcon, err)
+			}
+			linuxIconName = name + ".png"
+			iconPath := filepath.Join(directory, linuxIconName)
+			iconHash, err = copyAndHash(ctx, request.LinuxIcon, iconPath, 0o600)
+			if err != nil {
+				return Result{}, err
+			}
+			if err := linuxpkg.ValidatePNG(iconPath); err != nil {
+				return Result{}, portableError(ErrorIntegrity, "verify copied Linux icon", iconPath, err)
+			}
+			extraFiles = append(extraFiles, iconPath)
+		}
+		linuxInfoName = "linux-runtime.json"
+		linuxInfoPath := filepath.Join(directory, linuxInfoName)
+		if err := writeJSONFile(linuxInfoPath, linuxInfo{
+			FormatVersion: 1, ProductName: request.ProjectName, ProjectID: request.ProjectID,
+			Version: request.Version, Architecture: request.TargetArch,
+			Executable: executableName, Package: packageName,
+			RuntimeHash: runtimeHash, PackageHash: packageHash,
+			Icon: linuxIconName, IconHash: iconHash,
+			DataPolicy: "xdg", LibcPolicy: "runtime-defined",
+		}); err != nil {
+			return Result{}, err
+		}
+		extraFiles = append(extraFiles, linuxInfoPath)
+	}
 
 	infoPath := filepath.Join(directory, "build-info.json")
 	signaturePath := ""
@@ -218,7 +271,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		SourceExposed: request.SourceExposed,
 		Signature:     signatureName, SignatureHash: request.SignatureHash,
 		SigningKeyID: request.SigningKeyID, WindowsIcon: windowsIconName,
-		WindowsInfo: windowsInfoName,
+		WindowsInfo: windowsInfoName, LinuxIcon: linuxIconName, LinuxInfo: linuxInfoName,
 	}); err != nil {
 		return Result{}, err
 	}
@@ -263,6 +316,17 @@ func validateRuntime(value runtimepkg.Runtime, osName, arch string, terminal boo
 	if goruntime.GOOS == "windows" && osName == "windows" {
 		if err := windowspkg.ValidatePEAMD64(value.BinaryPath); err != nil {
 			return portableError(ErrorInvalid, "validate Windows runtime PE", value.BinaryPath, err)
+		}
+	}
+	// Registry runtimes always carry the current metadata version. A zero
+	// version is reserved for lightweight internal test doubles.
+	if goruntime.GOOS == "linux" && osName == "linux" &&
+		value.Metadata.FormatVersion == runtimepkg.CurrentMetadataVersion {
+		if arch != "amd64" {
+			return portableError(ErrorInvalid, "validate Linux runtime ELF", value.BinaryPath, errors.New("official Linux target currently supports x64 only"))
+		}
+		if err := linuxpkg.ValidateELFAMD64(value.BinaryPath); err != nil {
+			return portableError(ErrorInvalid, "validate Linux runtime ELF", value.BinaryPath, err)
 		}
 	}
 	return nil
