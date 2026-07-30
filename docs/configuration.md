@@ -41,9 +41,10 @@ embed = false
 include_source = false
 ```
 
-`build.terminal = false` requests an artifact that does not open or require a
-terminal on targets supporting that distinction. The setting becomes effective
-when target-specific packaging is implemented.
+`build.terminal = false` builds a graphical application. Linux desktop entries
+use `Terminal=false`, macOS uses an application bundle, and Windows launchers
+use the GUI PE subsystem so no console window is created. `true` retains the
+console/terminal behavior required by command-line applications.
 
 ## Complete Builder configuration
 
@@ -66,6 +67,8 @@ target = "host"
 terminal = true
 assets = ["assets/**", "data/**"]
 exclude = [".git/**", "dist/**", "tests/**", "*.log"]
+persistent = ["save.db", "captures/**"]
+export = ["captures/**"]
 
 [package]
 format = "portable"
@@ -95,10 +98,38 @@ paths are normalized to `/`, sorted deterministically, and retained as logical
 project paths. Overlapping patterns select a file only once. Case-only
 collisions and selected symlinks that escape the project are rejected.
 
+`build.persistent` declares runtime-generated files that survive application
+restarts and package upgrades. These paths are stored under the platform user
+data location, never in the temporary execution directory. A missing persistent
+file does not need a seed asset: if the application creates it at runtime, it
+will be retained. This is the recommended contract for SQLite databases:
+
+```toml
+[build]
+assets = ["assets/**"]
+persistent = ["application.db"]
+```
+
+`build.export` is the subset of persistent patterns whose real files should
+also be visible to a non-technical user. Every export pattern must appear
+exactly in `build.persistent`. For a portable application the files are copied
+beside the executable; for an installer whose application directory is not
+writable, they are copied to `~/Documents/<project.name>/`:
+
+```toml
+[build]
+persistent = ["application.db", "cards/**"]
+export = ["cards/**"]
+```
+
+Here the database stays internal while earned cards appear in a visible
+`cards/` directory. Fluxa source paths cannot be persistent or exported.
+
 The official Linux target is currently `linux-x64`. Its optional icon must be a
-bounded, valid PNG. Linux portable applications treat their installation
-directory as read-only and runtimes must use the XDG Base Directory locations
-for writable configuration, data, state, logs, and cache. The runtime binary,
+bounded, valid PNG. Internal data lives below
+`$XDG_DATA_HOME/fluxa/<project.id>/project`, defaulting to
+`~/.local/share/fluxa/<project.id>/project`. Explicit exports may be mirrored to
+the portable directory or Documents as described above. The runtime binary,
 not the Builder, determines the glibc compatibility baseline.
 
 macOS supports thin `macos-x64` and `macos-arm64` `.app` bundles. The optional
@@ -184,13 +215,17 @@ For `package.format = "portable"`, a successful host build is published as:
 ```text
 <build.output>/<os>-<arch>/<application>/
 ├── <application>[.exe]
+├── .fluxa-runtime[.exe]
 ├── <application>.flxpkg
 └── build-info.json
 ```
 
-The runtime must implement `--fluxa-package-self-test` and locate the package
-beside the executable. No output is published if assembly, package verification,
-runtime self-test, or atomic publication fails. Existing output is never
+The visible executable is the Fluxa Builder launcher. It verifies the sibling
+package, restores packaged program files, preserves declared data, and invokes
+the private runtime with `fluxa run <entry> -proj .`. The launcher implements
+`--fluxa-package-self-test`; the registered language runtime does not need
+native FLXPKG support. No output is published if assembly, package verification,
+launcher self-test, or atomic publication fails. Existing output is never
 overwritten.
 
 For the official `windows-x64` target, the executable uses `.exe` and the
@@ -202,6 +237,7 @@ ZIP:
 ```text
 <application>/
 ├── <application>.exe
+├── .fluxa-runtime.exe
 ├── <application>.flxpkg
 ├── <application>.flxpkg.sig  # when signing is enabled
 ├── <application>.ico         # when configured

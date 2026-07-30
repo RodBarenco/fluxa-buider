@@ -6,8 +6,9 @@ toolchain; it does not reimplement the Fluxa parser, resolver, bytecode engine,
 or runtime.
 
 The Builder currently validates and packages a tested Fluxa project, selects a
-verified compatible runtime, smoke-tests the portable application, and emits a
-deterministic ZIP or tar.gz with an external checksum.
+verified compatible runtime, builds an integrated application launcher,
+smoke-tests the portable application, and emits a deterministic ZIP or tar.gz
+with an external checksum.
 
 `--keep-work` retains `.fluxa-builder/work/<build-id>` for debugging. It should
 not be used in routine builds.
@@ -30,7 +31,9 @@ Replace `main.flx` with `project.entry` and `.` with the project root when
 needed. The Builder does not run this command automatically because it executes
 the application with its real side effects and may be long-running.
 
-Project configuration is documented in `docs/configuration.md`.
+Project configuration is documented in `docs/configuration.md`. The complete
+distribution workflow, including persistent databases and user-visible exports,
+is in `docs/distribution.md`.
 
 ## Requirements
 
@@ -64,11 +67,12 @@ The CI runs tests, the race detector, vet, build, and a version smoke test on
 Linux, Windows, and macOS. Native release gates additionally execute the
 official Windows x64 and Linux x64 portable pipelines.
 
-The Linux portable layout is distributed as a deterministic tar.gz. It supports
-an optional validated PNG icon and treats the installation directory as
-read-only. Fluxa runtimes must store writable data through the XDG Base
-Directory locations. glibc compatibility follows the selected runtime binary;
-the Builder does not relink or rewrite it.
+The Linux portable layout is distributed as a deterministic tar.gz. It contains
+the named launcher, a private Fluxa runtime, and the verified FLXPKG. Internal
+persistent data uses XDG; explicitly exported user files appear beside a
+writable portable application or under Documents for read-only installations.
+glibc compatibility follows the selected runtime binary; the Builder does not
+relink or rewrite it.
 
 macOS builds produce a conventional `.app` containing a thin x64 or arm64
 Mach-O runtime, the FLXPKG under `Contents/Resources`, deterministic
@@ -80,17 +84,19 @@ application files under `/opt/<project.id>`, a launcher under `/usr/bin`, a
 desktop entry, and the optional PNG under `/usr/share/pixmaps`. The package has
 no install/remove scripts and never deletes XDG user data.
 
-## Scope
+## Current scope
 
-The first functional milestone will run:
+The verified development build is:
 
-```text
-fluxa-builder build . --release --target host
+```sh
+fluxa-builder build . --include-source
 ```
 
-and produce a portable application containing a compatible Fluxa runtime,
-package, and build report. Implementation proceeds one reviewed phase at a
-time; see `PLANO_COMPLETO_FLUXA_BUILDER_AGENT.md`.
+It produces a directly launchable portable application containing the
+integrated launcher, compatible private Fluxa runtime, verified package, build
+report, deterministic archive, and the native installer currently implemented
+for the host target. The protected release path remains blocked on stable Fluxa
+bytecode export.
 
 Fluxa does not yet expose the stable compile command required for a protected
 release. For development of the remaining packaging pipeline only,
@@ -141,9 +147,23 @@ fluxa-builder runtime add ./fluxa-runtime --metadata ./runtime.json
 ```
 
 With a compatible registered runtime, `fluxa-builder build . --include-source`
-can now publish the first portable directory. The source option remains
-development-only, and the runtime must support FLXPKG v1 plus the
-`--fluxa-package-self-test` contract.
+publishes a portable directory whose named executable can be opened directly.
+The source option remains development-only. The integrated launcher supports
+FLXPKG v1 and `--fluxa-package-self-test`; the Fluxa language runtime remains a
+normal script runtime and is invoked with `run <entry> -proj .`.
+
+Stateful applications declare runtime-generated data explicitly:
+
+```toml
+[build]
+terminal = false
+persistent = ["application.db", "cards/**"]
+export = ["cards/**"]
+```
+
+The database survives restarts without being shipped as an asset. Exported
+cards remain persistent and are also copied to a user-visible `cards/`
+directory.
 
 ## Versioning
 

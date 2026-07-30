@@ -24,14 +24,15 @@ external packaging tool is required for generation.
 /usr/share/pixmaps/<project.id>.png  (when configured)
 ```
 
-The `/usr/bin` entry is a minimal launcher that executes the immutable runtime
-under `/opt`, where its sibling FLXPKG remains available. The desktop entry
+The `/usr/bin` entry executes the immutable integrated launcher under `/opt`,
+where its private runtime and sibling FLXPKG remain available. The desktop entry
 preserves `build.terminal` and references the pixmap by stable project ID.
 
 The package contains no maintainer scripts. Installation and removal therefore
 cannot start the application, mutate a home directory, or remove configuration,
-saves, state, logs, or caches. User data remains governed exclusively by the
-XDG policy from ADR 0020.
+saves, state, logs, or caches. Authoritative user data remains governed by the
+XDG policy from ADR 0020; explicit exports fall back to Documents because
+`/opt` is not user-writable.
 
 ## Verification
 

@@ -41,6 +41,5 @@ published to `dist`.
 
 ## Consequences
 
-The runtime must implement this protocol before it can be distributed through
-the standalone Builder pipeline. This deliberately fails closed while the
-current Fluxa runtime is being extended to load FLXPKG.
+The integrated application launcher implements this protocol. The private
+Fluxa language runtime does not need native FLXPKG support.

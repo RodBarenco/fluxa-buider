@@ -8,11 +8,12 @@ file collection, package construction, runtime selection, target formatting,
 verification, and build reporting. Parsing, resolving, executing, and compiling
 Fluxa code remain responsibilities of the official Fluxa toolchain.
 
-The planned pipeline is:
+The implemented source-package pipeline is:
 
 ```text
-config → validation → toolchain → preflight → collection/compilation
-       → manifest → package → verification → runtime → output → smoke test
+config → validation → toolchain → collection/source staging
+       → manifest → FLXPKG → runtime selection → launcher assembly
+       → self-test → archive/installer → atomic publication
 ```
 
 Builds use an isolated workspace and publish final artifacts atomically.
@@ -102,24 +103,48 @@ Metadata additionally binds the binary hash, toolchain hash, package format,
 program representation, terminal mode, and raw `fluxa.libs` hash. Resolution
 rehashes every candidate and fails closed if no single exact match exists.
 
-## Portable output
+## Application launcher
 
-Portable output contains a renamed runtime, a same-basename `.flxpkg`, and
-`build-info.json`. Assembly and hash verification happen inside the
-transactional workspace. A host runtime must then pass the non-interactive
-`--fluxa-package-self-test` contract before the directory is atomically
-published under `dist/<target>/`. Cross-target output remains unpublished until
-an equivalent trusted smoke mechanism exists.
+Portable output contains a renamed Fluxa Builder launcher, a private
+`.fluxa-runtime[.exe]`, a same-basename `.flxpkg`, and `build-info.json`.
+Assembly and hash verification happen inside the transactional workspace.
+
+The launcher, rather than the language runtime, owns the distribution contract:
+
+1. locate and fully verify the sibling FLXPKG;
+2. extract it into a private temporary directory;
+3. refresh packaged `.flx` files in the application data project;
+4. preserve only paths declared by `build.persistent`;
+5. run the private runtime as `fluxa run <entry> -proj .`;
+6. mirror `build.export` files to a user-visible directory.
+
+The launcher also implements the non-interactive
+`--fluxa-package-self-test` protocol. The registered Fluxa binary remains a
+normal script runtime and does not need to parse FLXPKG.
+
+## Runtime data
+
+Each application has a stable project data root keyed by `project.id`. Linux
+uses `$XDG_DATA_HOME/fluxa/<project.id>/project`, with the standard
+`~/.local/share` fallback. Packaged source is refreshed on every launch, while
+declared persistent files remain untouched after their first seed or runtime
+creation.
+
+Exports are necessarily copies, not the authoritative save location. They are
+written beside a writable portable application or below
+`~/Documents/<project.name>` when the installation directory is immutable.
+This keeps databases internal while allowing user-owned output such as cards,
+screenshots, and documents to remain discoverable.
 
 ## Terminal mode
 
-Project configuration will include an explicit terminal preference, planned as
-`build.terminal` with a conservative default of `true`.
+Project configuration includes `build.terminal` with a conservative default of
+`true`.
 
 - `true`: the application is allowed or expected to run attached to a terminal.
 - `false`: targets that support the distinction should build a GUI/background
   application without opening a terminal window.
 
-The setting is metadata until target-specific packaging is implemented. Windows
-will use it to choose the executable subsystem. On systems where it has no
-meaning, validation and documentation will define the behavior explicitly.
+Linux desktop entries copy the value, macOS applications use the bundle launch
+model, and Windows launchers are patched to PE GUI subsystem for `false` or
+Console subsystem for `true`.

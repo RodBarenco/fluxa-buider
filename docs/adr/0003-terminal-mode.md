@@ -10,7 +10,7 @@ defaulting to `true`.
 
 ## Consequences
 
-Target formatters decide how the preference maps to native artifacts. In
-particular, Windows packaging can distinguish console and GUI subsystems.
-Targets that cannot implement the distinction must retain deterministic,
-documented behavior rather than silently guessing.
+Target formatters map the preference to native artifacts. Windows launchers use
+PE GUI subsystem when false and Console subsystem when true. Linux desktop
+entries use the corresponding `Terminal` value. macOS applications launch
+through their bundle.

@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by ADR 0023 for the integrated launcher and explicit persistent/export
+data policy.
+
 ## Official target
 
 The first official Linux target is `linux-x64`, represented internally as
@@ -18,6 +21,7 @@ The deterministic tar.gz has one top-level application directory containing:
 
 ```text
 application
+.fluxa-runtime
 application.flxpkg
 application.flxpkg.sig   (optional)
 application.png          (when configured)
@@ -25,25 +29,28 @@ linux-runtime.json
 build-info.json
 ```
 
-The runtime is mode `0700` while regular data is `0600`; archive modes are
+The launcher and runtime are mode `0700` while regular data is `0600`; archive modes are
 derived from the target contract rather than the host filesystem. A configured
 Linux icon must be a bounded, decodable PNG regular file and is verified again
 after copying.
 
 `linux-runtime.json` records application identity, x64 architecture, filenames,
 verified hashes, `data_policy: xdg`, and `libc_policy: runtime-defined`.
-Desktop files and AppImage remain future distribution layers.
+Standalone portable desktop integration and AppImage remain future distribution
+layers. Debian desktop integration is implemented by ADR 0022.
 
 ## Writable data contract
 
-The installation directory is immutable application content. A Fluxa runtime
-must never save configuration, state, cache, logs, or user content beside the
-executable or package. It must follow the XDG Base Directory variables:
+The installation directory is immutable application content. The launcher
+stores authoritative persistent project data below `XDG_DATA_HOME`:
 
-- `XDG_CONFIG_HOME` for configuration;
-- `XDG_DATA_HOME` for persistent application data;
-- `XDG_STATE_HOME` for state and logs;
-- `XDG_CACHE_HOME` for disposable cache.
+```text
+$XDG_DATA_HOME/fluxa/<project.id>/project
+```
+
+When unset, `XDG_DATA_HOME` defaults to `~/.local/share`. Explicit
+`build.export` files are copied beside a writable portable application or to
+`~/Documents/<project.name>` for immutable installations.
 
 The native Ubuntu gate makes the complete installation tree read-only, runs the
 real ELF self-test from a path containing spaces and Unicode, verifies an XDG
@@ -57,4 +64,3 @@ runtime binary. Official runtime publishers must build on the oldest supported
 glibc baseline, record that policy in their release process, and test on every
 supported distribution. Static or musl runtimes require their own declared
 runtime identity in a future metadata revision.
-

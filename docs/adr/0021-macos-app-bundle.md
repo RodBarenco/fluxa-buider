@@ -2,6 +2,11 @@
 
 Status: accepted
 
+The current bundle still places the registered runtime directly in
+`Contents/MacOS`. Migration to the integrated launcher from ADR 0023 is the next
+macOS packaging step and must pass the native x64/arm64 gates before replacing
+this layout.
+
 ## Official targets
 
 Fluxa Builder supports thin `macos-x64` and `macos-arm64` application bundles.
@@ -47,4 +52,3 @@ tar.gz hierarchy.
 Code signing, hardened runtime entitlements, notarization, DMG/PKG installers,
 and universal binaries are intentionally deferred. Ed25519 package signatures
 remain distinct from Apple code signing.
-

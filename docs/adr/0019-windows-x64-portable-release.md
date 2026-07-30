@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by ADR 0023: the registered runtime remains unmodified, while the
+visible executable is now the integrated launcher.
+
 ## Official target
 
 The first official Windows target is `windows-x64`, represented internally as
@@ -12,7 +15,8 @@ A Windows build requires a verified registry runtime named
 `fluxa-runtime.exe`. On a Windows host the Builder parses it as PE32+, requires
 the AMD64 machine type, executable-image characteristics, no DLL flag, and a
 bounded section count. The Builder copies the runtime without rewriting or
-packing the PE.
+packing its PE. It adjusts only the launcher PE subsystem according to
+`build.terminal`.
 
 ## Portable layout
 
@@ -20,6 +24,7 @@ The deterministic ZIP has one top-level application directory containing:
 
 ```text
 application.exe
+.fluxa-runtime.exe
 application.flxpkg
 application.flxpkg.sig   (optional)
 application.ico          (optional)
@@ -53,8 +58,8 @@ replace this native execution gate.
 
 ## Deferred Windows formats
 
-Project-specific PE resource rewriting, Authenticode code signing, and an
-installer are deliberately deferred. They must not be confused with the
-Phase 15 Ed25519 package signature. Preserving the verified runtime PE and
-using a transparent sibling layout also avoids packer/self-modifying patterns
-that commonly trigger antivirus heuristics.
+Project-specific PE resources, Authenticode code signing, and an installer are
+deliberately deferred. They must not be confused with the Phase 15 Ed25519
+package signature. Preserving the verified runtime PE and using a transparent
+sibling layout also avoids packer/self-modifying patterns that commonly trigger
+antivirus heuristics.

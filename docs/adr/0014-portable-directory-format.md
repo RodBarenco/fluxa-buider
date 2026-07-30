@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by ADR 0023: the visible executable is now the integrated launcher and
+the registered runtime is stored privately as `.fluxa-runtime[.exe]`.
+
 ## Layout
 
 The first standalone output is:
@@ -9,6 +12,7 @@ The first standalone output is:
 ```text
 dist/<os>-<arch>/<application>/
 ├── <application>[.exe]
+├── .fluxa-runtime[.exe]
 ├── <application>.flxpkg
 └── build-info.json
 ```
@@ -17,8 +21,8 @@ The application name is a deterministic lowercase filesystem-safe form of the
 display name, with the final project ID component as fallback. Unicode letters
 and digits are retained; spaces, hyphens, and underscores become one hyphen.
 
-The runtime and package share the same basename. This is the runtime discovery
-convention for the sibling package.
+The launcher and package share the same basename. The language runtime uses the
+fixed private name `.fluxa-runtime[.exe]`.
 
 ## Assembly
 
@@ -26,7 +30,7 @@ Assembly occurs only under the transactional workspace. The Builder:
 
 - re-verifies the input FLXPKG;
 - validates runtime target and terminal mode;
-- copies runtime and package while hashing;
+- copies launcher, runtime, and package while hashing;
 - compares both hashes with their verified identities;
 - sets executable permission for Unix targets;
 - reopens and verifies the copied package;
@@ -38,14 +42,15 @@ runtime and package hashes, and source exposure.
 
 ## Smoke and publication
 
-Before publication, the staged executable is run with:
+Before publication, the staged launcher is run with:
 
 ```text
 --fluxa-package-self-test
 ```
 
-from its portable directory. The runtime must locate the sibling package,
-validate compatibility, and exit zero without opening the application UI.
+from its portable directory. The launcher locates and verifies the sibling
+package, validates its program representation, and exits zero without opening
+the application UI.
 Cross-target artifacts cannot be executed by the current host and are therefore
 not published yet.
 
