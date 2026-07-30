@@ -106,6 +106,11 @@ icon must be a valid ICNS container. `targets.macos.bundle_id` defaults to
 `project.id`; universal binaries, Apple code signing, and notarization are
 future distribution stages.
 
+Every successful `linux-x64` build also emits a Debian `amd64` installer. Its
+stable package identity is `project.id`; `project.version` becomes the Debian
+version, and `build.terminal` is copied to the desktop entry. No additional
+configuration switch is required.
+
 The initial package formats accepted by configuration are `portable` and `zip`.
 Only `portable` is part of the first functional milestone.
 

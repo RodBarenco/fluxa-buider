@@ -16,6 +16,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/embedded"
+	"github.com/RodBarenco/fluxa-builder/internal/installer"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
@@ -122,6 +123,7 @@ type buildDependencies struct {
 	buildPortable   func(context.Context, portable.Request) (portable.Result, error)
 	smokePortable   func(context.Context, portable.Result, time.Duration) error
 	archivePortable func(context.Context, portable.Result, string) (portable.ArchiveResult, error)
+	buildDebian     func(context.Context, installer.Request) (installer.Result, error)
 	buildEmbedded   func(context.Context, embedded.Request) (embedded.Info, error)
 	smokeExecutable func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
 	getenv          func(string) string
@@ -142,6 +144,7 @@ func defaultBuildDependencies() buildDependencies {
 		buildPortable:   portable.Build,
 		smokePortable:   portable.Smoke,
 		archivePortable: portable.Archive,
+		buildDebian:     installer.Debian{}.Build,
 		buildEmbedded:   embedded.Build,
 		smokeExecutable: portable.SmokeExecutable,
 		getenv:          os.Getenv,
@@ -299,6 +302,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	publishDestination := ""
 	var portableResult portable.Result
 	var archiveResult portable.ArchiveResult
+	var installerResult installer.Result
 	var embeddedResult embedded.Info
 	if options.embed {
 		applicationName := portable.ArtifactName(cfg.Project.Name, cfg.Project.ID)
@@ -397,6 +401,18 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			_, _ = fmt.Fprintf(stderr, "error: failed to create distribution archive\ncaused by: %v\n", err)
 			return 1
 		}
+		if packageManifest.Target.OS == "linux" {
+			installerResult, err = dependencies.buildDebian(context.Background(), installer.Request{
+				OutputDir: targetStage, ProjectName: cfg.Project.Name,
+				ProjectID: cfg.Project.ID, Version: cfg.Project.Version,
+				Terminal: cfg.Build.Terminal, Portable: portableResult,
+			})
+			if err != nil {
+				_ = workspace.Cleanup()
+				_, _ = fmt.Fprintf(stderr, "error: failed to create Debian installer\ncaused by: %v\n", err)
+				return 1
+			}
+		}
 		if err := workspace.Publish(context.Background(), targetStage, publishTarget); err != nil {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(stderr, "error: failed to publish portable application and archive\ncaused by: %v\n", err)
@@ -471,6 +487,20 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			_ = workspace.Cleanup()
 			writeString(stderr, "error: failed to write signature output\n")
 			return 1
+		}
+		if installerResult.Path != "" {
+			if _, err = fmt.Fprintf(
+				stdout,
+				"Native installer: %s\nInstaller format: %s\nInstaller bytes: %d\nInstaller SHA-256: %s\n",
+				filepath.Join(publishTarget, filepath.Base(installerResult.Path)),
+				installerResult.Format,
+				installerResult.Size,
+				installerResult.SHA256,
+			); err != nil {
+				_ = workspace.Cleanup()
+				writeString(stderr, "error: failed to write installer output\n")
+				return 1
+			}
 		}
 	}
 	if options.embed {

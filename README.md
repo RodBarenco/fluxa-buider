@@ -75,6 +75,11 @@ Mach-O runtime, the FLXPKG under `Contents/Resources`, deterministic
 `Info.plist`, and an optional validated ICNS icon. Universal binaries, Apple
 code signing, and notarization are not yet implemented.
 
+Linux x64 builds also emit a deterministic `.deb`. It installs immutable
+application files under `/opt/<project.id>`, a launcher under `/usr/bin`, a
+desktop entry, and the optional PNG under `/usr/share/pixmaps`. The package has
+no install/remove scripts and never deletes XDG user data.
+
 ## Scope
 
 The first functional milestone will run:

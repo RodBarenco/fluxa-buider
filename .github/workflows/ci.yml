@@ -46,6 +46,8 @@ jobs:
 
       - name: Linux x64 official portable integration
         if: runner.os == 'Linux'
+        env:
+          FLUXA_DEB_INSTALL_TEST: "1"
         run: go test ./internal/portable -run TestLinuxX64OfficialPortablePipeline -count=1
 
       - name: macOS official app bundle integration

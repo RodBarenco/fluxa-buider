@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RodBarenco/fluxa-builder/internal/executor"
+	"github.com/RodBarenco/fluxa-builder/internal/installer"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
 )
@@ -95,6 +97,19 @@ func TestLinuxX64OfficialPortablePipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertLinuxArchive(t, archive.Path, result.Name)
+
+	debianResult, err := (installer.Debian{}).Build(context.Background(), installer.Request{
+		OutputDir: outputRoot, ProjectName: fixture.request.ProjectName,
+		ProjectID: fixture.request.ProjectID, Version: fixture.request.Version,
+		Terminal: fixture.request.Terminal, Portable: result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateDebianWithDPKG(t, debianResult.Path)
+	if os.Getenv("FLUXA_DEB_INSTALL_TEST") == "1" {
+		installAndRemoveDebian(t, debianResult.Path, fixture.request.ProjectID, result, marker)
+	}
 }
 
 func runLinuxSelfTest() {
@@ -215,5 +230,66 @@ func assertLinuxArchive(t *testing.T, path, root string) {
 	}
 	if count != 6 {
 		t.Fatalf("tar entries = %d, want root plus five regular files", count)
+	}
+}
+
+func validateDebianWithDPKG(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat("/usr/bin/dpkg-deb"); err != nil {
+		t.Skip("dpkg-deb is unavailable")
+	}
+	execution, err := executor.Run(context.Background(), executor.Request{
+		Path: "/usr/bin/dpkg-deb", Args: []string{"--info", path}, Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dpkg-deb rejected package: %v\n%s", err, execution.Stderr)
+	}
+}
+
+func installAndRemoveDebian(t *testing.T, path, packageName string, result portable.Result, marker string) {
+	t.Helper()
+	command := "/usr/bin/sudo"
+	prefix := []string{"/usr/bin/dpkg"}
+	if os.Geteuid() == 0 {
+		command = "/usr/bin/dpkg"
+		prefix = nil
+	} else if _, err := os.Stat(command); err != nil {
+		t.Skip("root or sudo is required for the isolated install test")
+	}
+	run := func(args ...string) {
+		t.Helper()
+		execution, err := executor.Run(context.Background(), executor.Request{
+			Path: command, Args: append(append([]string(nil), prefix...), args...), Timeout: 30 * time.Second,
+			MaxStdout: 1 << 20, MaxStderr: 1 << 20,
+		})
+		if err != nil {
+			t.Fatalf("dpkg %v failed: %v\n%s", args, err, execution.Stderr)
+		}
+	}
+	run("--install", path)
+	installed := true
+	installedExecutable := filepath.Join("/usr", "bin", filepath.Base(result.Executable))
+	t.Cleanup(func() {
+		if !installed {
+			return
+		}
+		execution, err := executor.Run(context.Background(), executor.Request{
+			Path: command, Args: append(append([]string(nil), prefix...), "--remove", packageName),
+			Timeout: 30 * time.Second,
+		})
+		if err != nil {
+			t.Errorf("failed to remove Debian test package: %v\n%s", err, execution.Stderr)
+		}
+	})
+	if _, err := portable.SmokeExecutable(
+		context.Background(), installedExecutable, filepath.Dir(installedExecutable),
+		result.PackageHash, 10*time.Second,
+	); err != nil {
+		t.Fatalf("installed Debian launcher failed: %v", err)
+	}
+	run("--remove", packageName)
+	installed = false
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("Debian removal deleted XDG user data: %v", err)
 	}
 }

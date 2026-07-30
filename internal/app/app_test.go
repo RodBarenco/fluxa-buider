@@ -20,6 +20,7 @@ import (
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
 	"github.com/RodBarenco/fluxa-builder/internal/embedded"
+	"github.com/RodBarenco/fluxa-builder/internal/installer"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
@@ -224,6 +225,7 @@ icon = "aplicação.ico"
 			return nil
 		},
 		archivePortable: portable.Archive,
+		buildDebian:     installer.Debian{}.Build,
 		buildEmbedded:   embedded.Build,
 		smokeExecutable: func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error) {
 			return portable.SmokeReport{}, nil
@@ -266,6 +268,9 @@ icon = "aplicação.ico"
 		!strings.Contains(stdout.String(), "Archive SHA-256:") {
 		t.Fatalf("Run(build) stdout = %q, want archive summary", stdout.String())
 	}
+	if targetOS == "linux" && !strings.Contains(stdout.String(), "Installer format: deb") {
+		t.Fatalf("Run(build) stdout = %q, want Debian installer summary", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), "Package signature:") ||
 		!strings.Contains(stdout.String(), "Signing key ID:") {
 		t.Fatalf("Run(build) stdout = %q, want signature summary", stdout.String())
@@ -286,6 +291,15 @@ icon = "aplicação.ico"
 	}
 	if _, err := os.Stat(filepath.Join(targetOutput, artifactName+archiveExtension+".sha256")); err != nil {
 		t.Fatalf("archive checksum missing: %v", err)
+	}
+	if targetOS == "linux" {
+		debianName := "com.example.cli-test_1.0.0_amd64.deb"
+		if _, err := os.Stat(filepath.Join(targetOutput, debianName)); err != nil {
+			t.Fatalf("Debian installer missing: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(targetOutput, debianName+".sha256")); err != nil {
+			t.Fatalf("Debian checksum missing: %v", err)
+		}
 	}
 	if targetOS == "windows" {
 		if _, err := os.Stat(filepath.Join(targetOutput, "cli-test", "cli-test.ico")); err != nil {
