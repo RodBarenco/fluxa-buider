@@ -33,6 +33,7 @@ type Requirement struct {
 	BytecodeABI          string
 	LibrariesSHA256      string
 	ProgramFormat        string
+	Packaged             bool
 	OS                   string
 	Arch                 string
 	Terminal             bool
@@ -268,6 +269,7 @@ func compatibleRuntime(metadata Metadata, requirement Requirement) bool {
 		metadata.LibrariesSHA256 != requirement.LibrariesSHA256 ||
 		metadata.BytecodeVersion != requirement.BytecodeVersion ||
 		metadata.BytecodeABI != requirement.BytecodeABI ||
+		metadata.Packaged != requirement.Packaged ||
 		!contains(metadata.ProgramFormats, requirement.ProgramFormat) {
 		return false
 	}

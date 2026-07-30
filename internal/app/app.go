@@ -307,6 +307,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		BytecodeABI:          packageManifest.Toolchain.BytecodeABI,
 		LibrariesSHA256:      packageManifest.Toolchain.LibrariesSHA256,
 		ProgramFormat:        packageManifest.Build.ProgramFormat,
+		Packaged:             true,
 		OS:                   packageManifest.Target.OS,
 		Arch:                 packageManifest.Target.Arch,
 		Terminal:             packageManifest.Target.Terminal,

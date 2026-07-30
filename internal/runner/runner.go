@@ -19,6 +19,7 @@ type Request struct {
 	PackagePath     string
 	RuntimePath     string
 	DistributionDir string
+	PackagedRuntime bool
 	Stdout          io.Writer
 	Stderr          io.Writer
 	Stdin           io.Reader
@@ -80,7 +81,17 @@ func Run(ctx context.Context, request Request) error {
 		return fmt.Errorf("project entry %q is missing from package", info.Manifest.Project.Entry)
 	}
 
-	command := exec.CommandContext(ctx, request.RuntimePath, "run", entry, "-proj", ".") // #nosec G204 -- verified caller-selected runtime.
+	var command *exec.Cmd
+	if request.PackagedRuntime {
+		command = exec.CommandContext(ctx, request.RuntimePath, // #nosec G204 -- verified packaged runtime.
+			"__fluxa_builder_run_v1", entry, projectRoot)
+		command.Env = append(os.Environ(),
+			"FLUXA_BUILDER_RUNTIME_AUTH="+
+				"fluxa-builder-packaged-runtime-v1:"+
+				"4f726967696e2d6c6f636b65642d72756e74696d65")
+	} else {
+		command = exec.CommandContext(ctx, request.RuntimePath, "run", entry, "-proj", ".") // #nosec G204 -- caller-selected development runtime.
+	}
 	command.Dir = projectRoot
 	command.Stdin = request.Stdin
 	command.Stdout = request.Stdout

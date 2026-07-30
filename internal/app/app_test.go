@@ -493,7 +493,7 @@ func TestRuntimeAddAndListCommands(t *testing.T) {
 	emptyHash := sha256.Sum256(nil)
 	metadata := filepath.Join(root, "runtime.json")
 	metadataJSON := fmt.Sprintf(`{
-  "format_version": 1,
+  "format_version": 2,
   "fluxa_version": "unreported",
   "toolchain_sha256": "%s",
   "package_format_version": 1,
@@ -501,6 +501,7 @@ func TestRuntimeAddAndListCommands(t *testing.T) {
   "bytecode_abi": "",
   "libraries_sha256": "%s",
   "program_formats": ["fluxa-source"],
+  "packaged": false,
   "os": "linux",
   "arch": "amd64",
   "terminal": true,

@@ -100,8 +100,9 @@ relevant compile flags, optional library backends, and bytecode/package ABI.
 Verified runtimes live in a local registry keyed by Fluxa version, target, and
 terminal mode.
 Metadata additionally binds the binary hash, toolchain hash, package format,
-program representation, terminal mode, and raw `fluxa.libs` hash. Resolution
-rehashes every candidate and fails closed if no single exact match exists.
+program representation, packaged-runtime mode, terminal mode, and raw
+`fluxa.libs` hash. Resolution rehashes every candidate and fails closed if no
+single exact match exists.
 
 ## Application launcher
 
@@ -120,7 +121,9 @@ The launcher, rather than the language runtime, owns the distribution contract:
 
 The launcher also implements the non-interactive
 `--fluxa-package-self-test` protocol. The registered Fluxa binary remains a
-normal script runtime and does not need to parse FLXPKG.
+script runtime and does not need to parse FLXPKG, but distribution builds select
+the `FLUXA_PACKAGED_RUNTIME` variant. That variant refuses the public CLI and
+accepts only identity probing plus the launcher's private execution protocol.
 
 ## Runtime data
 

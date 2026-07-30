@@ -17,7 +17,7 @@ import (
 
 const (
 	// CurrentMetadataVersion is the runtime registry metadata schema.
-	CurrentMetadataVersion = 1
+	CurrentMetadataVersion = 2
 	maxMetadataSize        = 1024 * 1024
 )
 
@@ -33,6 +33,7 @@ type Metadata struct {
 	BytecodeABI          string   `json:"bytecode_abi"`
 	LibrariesSHA256      string   `json:"libraries_sha256"`
 	ProgramFormats       []string `json:"program_formats"`
+	Packaged             bool     `json:"packaged"`
 	OS                   string   `json:"os"`
 	Arch                 string   `json:"arch"`
 	Terminal             bool     `json:"terminal"`
@@ -121,7 +122,7 @@ func decodeMetadata(reader io.Reader) (Metadata, error) {
 	for _, field := range []string{
 		"format_version", "fluxa_version", "toolchain_sha256",
 		"package_format_version", "bytecode_version", "bytecode_abi",
-		"libraries_sha256", "program_formats", "os", "arch", "terminal",
+		"libraries_sha256", "program_formats", "packaged", "os", "arch", "terminal",
 		"binary_name", "binary_sha256",
 	} {
 		if _, exists := fields[field]; !exists {

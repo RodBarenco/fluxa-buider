@@ -184,11 +184,11 @@ Use `--registry <path>` on these commands or `--runtime-registry <path>` on
 `build` for an exact alternate registry. `FLUXA_BUILDER_HOME` changes the
 Builder home globally.
 
-`runtime.json` schema v1:
+`runtime.json` schema v2:
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "fluxa_version": "unreported",
   "toolchain_sha256": "<64 lowercase hex>",
   "package_format_version": 1,
@@ -196,6 +196,7 @@ Builder home globally.
   "bytecode_abi": "",
   "libraries_sha256": "<SHA-256 of fluxa.libs, or empty content>",
   "program_formats": ["fluxa-source"],
+  "packaged": true,
   "os": "linux",
   "arch": "amd64",
   "terminal": true,
@@ -203,6 +204,11 @@ Builder home globally.
   "binary_sha256": "<64 lowercase hex>"
 }
 ```
+
+`packaged = true` marks a runtime compiled with
+`FLUXA_PACKAGED_RUNTIME=1`. Source-package builds require it. Such a runtime
+allows identity probing and the launcher's private entry, but refuses public
+CLI commands such as `run`, `dis`, `init`, and `apply`.
 
 `runtime add` is an explicit local trust decision. It verifies paths,
 permissions, metadata, and hashes, but signed runtime provenance is not yet

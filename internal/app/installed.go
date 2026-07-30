@@ -59,6 +59,7 @@ func RunInstalled(executable string, args []string, stdin io.Reader, stdout, std
 		PackagePath:     packagePath,
 		RuntimePath:     filepath.Join(directory, runtimeName),
 		DistributionDir: directory,
+		PackagedRuntime: true,
 		Stdin:           stdin,
 		Stdout:          stdout,
 		Stderr:          stderr,

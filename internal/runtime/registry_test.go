@@ -71,6 +71,7 @@ func TestResolveMissingAndIncompatibleRuntime(t *testing.T) {
 		{"bytecode ABI", func(value *runtimepkg.Requirement) { value.BytecodeABI = "other" }},
 		{"libraries", func(value *runtimepkg.Requirement) { value.LibrariesSHA256 = toolchainHash }},
 		{"program format", func(value *runtimepkg.Requirement) { value.ProgramFormat = "fluxa-bytecode" }},
+		{"packaged mode", func(value *runtimepkg.Requirement) { value.Packaged = true }},
 		{"terminal", func(value *runtimepkg.Requirement) { value.Terminal = false }},
 	}
 	for _, tt := range tests {
@@ -155,7 +156,7 @@ func TestReadMetadataRejectsMissingAndUnknownFields(t *testing.T) {
 
 	unknown := filepath.Join(root, "unknown.json")
 	data := `{
-  "format_version": 1,
+  "format_version": 2,
   "fluxa_version": "unreported",
   "toolchain_sha256": "` + toolchainHash + `",
   "package_format_version": 1,
@@ -163,6 +164,7 @@ func TestReadMetadataRejectsMissingAndUnknownFields(t *testing.T) {
   "bytecode_abi": "",
   "libraries_sha256": "` + librariesHash + `",
   "program_formats": ["fluxa-source"],
+  "packaged": false,
   "os": "linux",
   "arch": "amd64",
   "terminal": true,

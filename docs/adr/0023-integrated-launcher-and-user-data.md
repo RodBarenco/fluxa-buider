@@ -23,6 +23,17 @@ the call to:
 fluxa run <entry> -proj .
 ```
 
+The private runtime is compiled with `FLUXA_PACKAGED_RUNTIME=1`. It permits
+`runtime info` for registry identity and a versioned private launcher entry.
+All public CLI commands return exit code 126. Runtime metadata must declare
+`packaged: true`, and source-package resolution requires that exact capability.
+
+The private entry uses a launcher protocol token to prevent accidental direct
+use. This is not represented as unbreakable DRM: a determined owner can inspect
+or patch a native binary. The security claim is that the distributed runtime is
+not usable as a normal Fluxa CLI and that the supported launcher path verifies
+the package before execution.
+
 Project configuration defines two explicit data sets:
 
 - `build.persistent`: runtime paths retained in platform user data;
@@ -52,4 +63,3 @@ copy the setting. macOS uses its application bundle.
 - User-owned output can be visible without exposing all internal state.
 - Installed read-only application trees fall back to Documents for exports.
 - The current source representation remains explicitly development-only.
-

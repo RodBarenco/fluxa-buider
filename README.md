@@ -165,6 +165,11 @@ The database survives restarts without being shipped as an asset. Exported
 cards remain persistent and are also copied to a user-visible `cards/`
 directory.
 
+Distributed source packages require a Fluxa runtime built with
+`make build-packaged` and registered with `"packaged": true`. The shipped
+private runtime refuses direct commands such as `run arbitrary.flx`; only the
+verified application launcher can use its private execution entry.
+
 ## Versioning
 
 Fluxa Builder follows Semantic Versioning. While the version is below `1.0.0`,

@@ -73,9 +73,9 @@ creates it before writing. Starfight creates `cards/` with `fs.mkdir`.
 
 ## 3. Register a compatible runtime
 
-The runtime registry is an explicit local trust store. Create strict metadata
+The runtime registry is an explicit local trust store. Create strict schema-v2 metadata
 for each OS, architecture, terminal mode, toolchain hash, `fluxa.libs` hash,
-and supported program format, then add the binary:
+supported program format, and packaged-runtime mode, then add the binary:
 
 ```sh
 fluxa-builder runtime add ./fluxa-runtime \
@@ -90,6 +90,17 @@ fluxa-builder runtime list
 
 Use `--registry` and `--runtime-registry` to select a non-default registry.
 The current development pipeline uses `program_formats: ["fluxa-source"]`.
+It also requires `"packaged": true`.
+
+Build the distribution variant of Fluxa with:
+
+```sh
+make FLUXA_GRAPH_RAYLIB=1 build-packaged
+```
+
+Choose the target-specific backend flags required by the application. The
+resulting `fluxa_runtime` is not a development CLI. Direct commands such as
+`fluxa_runtime run arbitrary.flx` exit with code 126.
 
 ## 4. Build
 
@@ -129,6 +140,7 @@ On launch:
 - the FLXPKG is verified before any packaged file executes;
 - `.flx` files are refreshed from the verified package;
 - the private runtime is invoked in project mode;
+- the private runtime refuses direct public CLI use;
 - undeclared runtime changes are replaced by packaged content;
 - persistent paths survive restarts and upgrades;
 - exported paths are copied to a visible location.
@@ -188,3 +200,8 @@ can be extracted by a determined user. A protected release remains blocked on
 a stable Fluxa bytecode compiler/export contract with explicit bytecode version
 and ABI.
 
+The packaged-runtime authorization is a strong product boundary against normal
+or accidental reuse of the shipped runtime. It is not DRM against a determined
+attacker who patches binaries. Package and file SHA-256 verification protects
+integrity; bytecode or native compilation is still required for source
+confidentiality.
