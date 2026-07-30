@@ -151,7 +151,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	if _, err := flxpkg.Verify(packagePath); err != nil {
 		return Result{}, portableError(ErrorIntegrity, "verify copied package", packagePath, err)
 	}
-	if request.TargetOS != "windows" {
+	if goruntime.GOOS != "windows" && request.TargetOS != "windows" {
 		info, err := os.Stat(executablePath)
 		if err != nil || info.Mode().Perm()&0o111 == 0 {
 			return Result{}, portableError(ErrorPermission, "verify executable permission", executablePath, errors.New("runtime is not executable"))

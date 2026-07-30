@@ -304,6 +304,9 @@ func assertToolchainErrorKind(t *testing.T, err error, want toolchain.ErrorKind)
 
 func fakeExecutable(t *testing.T, dir, name string) string {
 	t.Helper()
+	if filepath.Separator == '\\' && !strings.EqualFold(filepath.Ext(name), ".exe") {
+		name += ".exe"
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

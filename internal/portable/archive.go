@@ -144,7 +144,11 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 		if entryInfo.Mode()&os.ModeSymlink != 0 || !entryInfo.Mode().IsRegular() {
 			return nil, portableError(ErrorInvalid, "validate archive input", path, errors.New("only non-symlink regular files are allowed"))
 		}
-		entries = append(entries, archiveEntry{path: path, mode: entryInfo.Mode().Perm()})
+		mode := os.FileMode(0o600)
+		if portable.TargetOS != "windows" && path == portable.Executable {
+			mode = 0o700
+		}
+		entries = append(entries, archiveEntry{path: path, mode: mode})
 	}
 	for name, found := range expected {
 		if !found {

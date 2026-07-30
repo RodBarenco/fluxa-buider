@@ -64,7 +64,10 @@ func TestWindowsX64OfficialPortablePipeline(t *testing.T) {
 	longUnicodeRoot := filepath.Join(
 		t.TempDir(),
 		"Usuário Fluxa com espaços",
-		strings.Repeat("diretório-longo-", 12),
+		// Keep the complete executable path below legacy MAX_PATH while still
+		// exercising a realistically long path. Paths beyond that boundary
+		// depend on a machine-wide Windows policy outside Builder's control.
+		strings.Repeat("diretório-longo-", 4),
 	)
 	if err := os.MkdirAll(longUnicodeRoot, 0o700); err != nil {
 		t.Fatal(err)

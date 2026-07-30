@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 )
@@ -72,7 +73,7 @@ func Build(ctx context.Context, request Request) (Info, error) {
 	if runtimeInfo.Size() == 0 || runtimeInfo.Size() > maxRuntimeSize {
 		return Info{}, embeddedError(ErrorLimit, "validate runtime size", request.RuntimePath, errors.New("runtime size is outside supported bounds"))
 	}
-	if request.ExecutableOS != "windows" && runtimeInfo.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && request.ExecutableOS != "windows" && runtimeInfo.Mode().Perm()&0o111 == 0 {
 		return Info{}, embeddedError(ErrorInvalid, "validate runtime permission", request.RuntimePath, errors.New("runtime is not executable"))
 	}
 	packageInfo, err := flxpkg.Verify(request.PackagePath)
