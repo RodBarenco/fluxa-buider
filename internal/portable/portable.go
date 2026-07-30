@@ -33,6 +33,7 @@ type Request struct {
 	PackagePath   string
 	PackageSHA256 string
 	Runtime       runtimepkg.Runtime
+	LauncherPath  string
 	SourceExposed bool
 	SignaturePath string
 	SignatureHash string
@@ -160,12 +161,33 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	if request.TargetOS == "windows" {
 		executableMode = 0o600
 	}
-	runtimeHash, err := copyAndHash(ctx, request.Runtime.BinaryPath, executablePath, executableMode)
-	if err != nil {
-		return Result{}, err
+	runtimeHash := ""
+	privateRuntimePath := ""
+	if request.LauncherPath == "" {
+		runtimeHash, err = copyAndHash(ctx, request.Runtime.BinaryPath, executablePath, executableMode)
+		if err != nil {
+			return Result{}, err
+		}
+	} else {
+		if _, err = copyAndHash(ctx, request.LauncherPath, executablePath, executableMode); err != nil {
+			return Result{}, portableError(ErrorIO, "copy application launcher", request.LauncherPath, err)
+		}
+		privateRuntimeName := ".fluxa-runtime"
+		if request.TargetOS == "windows" {
+			privateRuntimeName += ".exe"
+		}
+		privateRuntimePath = filepath.Join(directory, privateRuntimeName)
+		runtimeMode := os.FileMode(0o700)
+		if request.TargetOS == "windows" {
+			runtimeMode = 0o600
+		}
+		runtimeHash, err = copyAndHash(ctx, request.Runtime.BinaryPath, privateRuntimePath, runtimeMode)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	if runtimeHash != request.Runtime.Metadata.BinarySHA256 {
-		return Result{}, portableError(ErrorIntegrity, "verify copied runtime", executablePath, errors.New("runtime SHA-256 mismatch"))
+		return Result{}, portableError(ErrorIntegrity, "verify copied runtime", request.Runtime.BinaryPath, errors.New("runtime SHA-256 mismatch"))
 	}
 	packageHash, err := copyAndHash(ctx, request.PackagePath, packagePath, 0o600)
 	if err != nil {
@@ -185,6 +207,9 @@ func Build(ctx context.Context, request Request) (Result, error) {
 	}
 
 	extraFiles := make([]string, 0, 2)
+	if privateRuntimePath != "" {
+		extraFiles = append(extraFiles, privateRuntimePath)
+	}
 	windowsIconName := ""
 	windowsInfoName := ""
 	linuxIconName := ""

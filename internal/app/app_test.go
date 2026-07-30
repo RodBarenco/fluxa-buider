@@ -49,6 +49,21 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestInstalledInvocationDetection(t *testing.T) {
+	t.Parallel()
+
+	for _, executable := range []string{"/opt/bin/fluxa-builder", `C:\tools\fluxa-builder.exe`} {
+		if IsInstalledInvocation(executable) {
+			t.Fatalf("IsInstalledInvocation(%q) = true, want false", executable)
+		}
+	}
+	for _, executable := range []string{"/opt/games/starfight", `C:\Games\Starfight.exe`} {
+		if !IsInstalledInvocation(executable) {
+			t.Fatalf("IsInstalledInvocation(%q) = false, want true", executable)
+		}
+	}
+}
+
 func TestRunHelp(t *testing.T) {
 	t.Parallel()
 

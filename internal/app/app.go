@@ -148,6 +148,7 @@ type buildDependencies struct {
 	buildDebian     func(context.Context, installer.Request) (installer.Result, error)
 	buildEmbedded   func(context.Context, embedded.Request) (embedded.Info, error)
 	smokeExecutable func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
+	executablePath  func() (string, error)
 	getenv          func(string) string
 }
 
@@ -169,6 +170,7 @@ func defaultBuildDependencies() buildDependencies {
 		buildDebian:     installer.Debian{}.Build,
 		buildEmbedded:   embedded.Build,
 		smokeExecutable: portable.SmokeExecutable,
+		executablePath:  os.Executable,
 		getenv:          os.Getenv,
 	}
 }
@@ -388,6 +390,7 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			PackagePath:   packageResult.Path,
 			PackageSHA256: packageResult.SHA256,
 			Runtime:       selectedRuntime,
+			LauncherPath:  currentExecutable(dependencies.executablePath),
 			SourceExposed: packageManifest.Build.SourceExposed,
 			SignaturePath: signatureResult.Path,
 			SignatureHash: signatureResult.SHA256,
@@ -595,6 +598,17 @@ func packageSources(compiledDir string, collection collector.Result, compilation
 		}
 	}
 	return sources
+}
+
+func currentExecutable(resolve func() (string, error)) string {
+	if resolve == nil {
+		return ""
+	}
+	path, err := resolve()
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func runVerify(args []string, stdout, stderr io.Writer) int {

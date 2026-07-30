@@ -8,5 +8,8 @@ import (
 )
 
 func main() {
+	if app.IsInstalledInvocation(os.Args[0]) {
+		os.Exit(app.RunInstalled(os.Args[0], os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	os.Exit(app.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
