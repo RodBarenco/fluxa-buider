@@ -23,7 +23,10 @@ func TestValidateELFAMD64(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalid := filepath.Join(t.TempDir(), "invalid")
-	if err := os.WriteFile(invalid, []byte("not ELF"), 0o700); err != nil {
+	if err := os.WriteFile(invalid, []byte("not ELF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(invalid, 0o700); err != nil { // #nosec G302 -- executable test fixture in a private TempDir.
 		t.Fatal(err)
 	}
 	if err := linuxpkg.ValidateELFAMD64(invalid); err == nil {

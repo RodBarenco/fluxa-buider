@@ -112,10 +112,12 @@ func runLinuxSelfTest() {
 		os.Exit(92)
 	}
 	markerDir := filepath.Join(dataRoot, "fluxa-builder-test")
-	if err := os.MkdirAll(markerDir, 0o700); err != nil {
+	// XDG_DATA_HOME is deliberately injected by the parent test and points to
+	// its private TempDir; the child process is validating the runtime contract.
+	if err := os.MkdirAll(markerDir, 0o700); err != nil { // #nosec G703 -- test-owned XDG root.
 		os.Exit(93)
 	}
-	if err := os.WriteFile(filepath.Join(markerDir, "self-test.json"), []byte("{}\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(markerDir, "self-test.json"), []byte("{}\n"), 0o600); err != nil { // #nosec G703 -- path is confined to the test-owned XDG root.
 		os.Exit(94)
 	}
 	response := map[string]any{
@@ -157,10 +159,10 @@ func makeInstallationReadOnly(t *testing.T, result portable.Result) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(result.Directory, 0o555); err != nil {
+	if err := os.Chmod(result.Directory, 0o555); err != nil { // #nosec G302 -- read-only test installation directory.
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(result.Directory, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(result.Directory, 0o755) }) // #nosec G302 -- restore traversal for TempDir cleanup.
 }
 
 func hashPortableTree(t *testing.T, root string) string {
