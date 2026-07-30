@@ -126,8 +126,8 @@ Here the database stays internal while earned cards appear in a visible
 `cards/` directory. Fluxa source paths cannot be persistent or exported.
 
 The official Linux target is currently `linux-x64`. Its optional icon must be a
-bounded, valid PNG. Internal data lives below
-Linux uses `$XDG_DATA_HOME/fluxa/<project.id>/project`, defaulting to
+bounded, valid PNG. Linux uses
+`$XDG_DATA_HOME/fluxa/<project.id>/project`, defaulting to
 `~/.local/share/fluxa/<project.id>/project`. Windows uses
 `%AppData%\fluxa\<project.id>\project`, and macOS uses
 `~/Library/Application Support/fluxa/<project.id>/project`. Explicit exports may be mirrored to

@@ -67,6 +67,9 @@ The CI runs tests, the race detector, vet, build, and a version smoke test on
 Linux, Windows, and macOS. Native release gates additionally execute the
 official Windows x64 and Linux x64 portable pipelines.
 
+For the complete packaging workflow in Portuguese, see
+[Manual do Usuário](docs/manual-do-usuario.md).
+
 The Linux portable layout is distributed as a deterministic tar.gz. It contains
 the named launcher, a private Fluxa runtime, and the verified FLXPKG. Internal
 persistent data uses XDG; explicitly exported user files appear beside a
