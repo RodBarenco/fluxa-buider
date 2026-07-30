@@ -39,8 +39,7 @@ func Run(ctx context.Context, request Request) error {
 	}
 
 	extracted := filepath.Join(workspace, "package")
-	projectRoot := filepath.Join(workspace, "project")
-	for _, directory := range []string{extracted, projectRoot} {
+	for _, directory := range []string{extracted} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			return fmt.Errorf("create runtime directory: %w", err)
 		}
@@ -52,14 +51,22 @@ func Run(ctx context.Context, request Request) error {
 	if info.Manifest.Build.ProgramFormat != "fluxa-source" {
 		return fmt.Errorf("unsupported program format %q", info.Manifest.Build.ProgramFormat)
 	}
+	projectRoot, err := persistentProjectRoot(info.Manifest.Project.ID)
+	if err != nil {
+		return err
+	}
+	if err := removeProgramSources(projectRoot); err != nil {
+		return fmt.Errorf("refresh packaged program: %w", err)
+	}
 	for _, source := range []struct {
-		path   string
-		prefix string
+		path    string
+		prefix  string
+		program bool
 	}{
-		{filepath.Join(extracted, "program", "source"), "program/source"},
-		{filepath.Join(extracted, "resources"), "resources"},
+		{filepath.Join(extracted, "program", "source"), "program/source", true},
+		{filepath.Join(extracted, "resources"), "resources", false},
 	} {
-		if err := mergeTree(source.path, projectRoot); err != nil {
+		if err := mergeTree(source.path, projectRoot, info.Manifest.Build.Persistent, source.program); err != nil {
 			return fmt.Errorf("materialize %s: %w", source.prefix, err)
 		}
 	}
@@ -83,7 +90,7 @@ func Run(ctx context.Context, request Request) error {
 	return nil
 }
 
-func mergeTree(sourceRoot, destinationRoot string) error {
+func mergeTree(sourceRoot, destinationRoot string, persistent []string, program bool) error {
 	info, err := os.Stat(sourceRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -103,12 +110,67 @@ func mergeTree(sourceRoot, destinationRoot string) error {
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}
-		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-			if err == nil {
-				return fmt.Errorf("package sections collide at %q", filepath.ToSlash(relative))
+		logical := filepath.ToSlash(relative)
+		if !program && matchesPersistent(persistent, logical) {
+			if _, err := os.Lstat(target); err == nil {
+				return nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
+		} else if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return os.Rename(path, target)
 	})
+}
+
+func persistentProjectRoot(projectID string) (string, error) {
+	dataRoot := os.Getenv("XDG_DATA_HOME")
+	if dataRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user data directory: %w", err)
+		}
+		dataRoot = filepath.Join(home, ".local", "share")
+	}
+	root := filepath.Join(dataRoot, "fluxa", projectID, "project")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("create persistent application data: %w", err)
+	}
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", errors.New("persistent application data path is unsafe")
+	}
+	return root, nil
+}
+
+func removeProgramSources(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(path), ".flx") {
+			return os.Remove(path)
+		}
+		return nil
+	})
+}
+
+func matchesPersistent(patterns []string, logical string) bool {
+	for _, pattern := range patterns {
+		matched, _ := filepath.Match(filepath.FromSlash(pattern), filepath.FromSlash(logical))
+		if matched {
+			return true
+		}
+		if strings.HasSuffix(pattern, "/**") {
+			prefix := strings.TrimSuffix(pattern, "**")
+			if strings.HasPrefix(logical, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }

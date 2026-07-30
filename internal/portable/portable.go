@@ -172,6 +172,11 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		if _, err = copyAndHash(ctx, request.LauncherPath, executablePath, executableMode); err != nil {
 			return Result{}, portableError(ErrorIO, "copy application launcher", request.LauncherPath, err)
 		}
+		if request.TargetOS == "windows" {
+			if err := windowspkg.ConfigureTerminal(executablePath, request.Terminal); err != nil {
+				return Result{}, portableError(ErrorInvalid, "configure Windows terminal mode", executablePath, err)
+			}
+		}
 		privateRuntimeName := ".fluxa-runtime"
 		if request.TargetOS == "windows" {
 			privateRuntimeName += ".exe"

@@ -63,6 +63,9 @@ func validate(cfg *Config) error {
 	if err := validatePatterns("build.exclude", cfg.Build.Exclude); err != nil {
 		return err
 	}
+	if err := validatePatterns("build.persistent", cfg.Build.Persistent); err != nil {
+		return err
+	}
 
 	if cfg.Package.Format != "portable" && cfg.Package.Format != "zip" {
 		return validationError("package.format", cfg.Package.Format, "must be portable or zip")

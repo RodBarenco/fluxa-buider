@@ -44,11 +44,12 @@ type ToolchainConfig struct {
 
 // BuildConfig controls output collection and target selection.
 type BuildConfig struct {
-	Output   string   `toml:"output"`
-	Target   string   `toml:"target"`
-	Terminal bool     `toml:"-"`
-	Assets   []string `toml:"assets"`
-	Exclude  []string `toml:"exclude"`
+	Output     string   `toml:"output"`
+	Target     string   `toml:"target"`
+	Terminal   bool     `toml:"-"`
+	Assets     []string `toml:"assets"`
+	Exclude    []string `toml:"exclude"`
+	Persistent []string `toml:"persistent"`
 
 	terminal *bool
 }
@@ -87,6 +88,9 @@ func (c *BuildConfig) UnmarshalTOML(data any) error {
 		return err
 	}
 	if c.Exclude, err = stringSlice(raw, "exclude"); err != nil {
+		return err
+	}
+	if c.Persistent, err = stringSlice(raw, "persistent"); err != nil {
 		return err
 	}
 	return nil

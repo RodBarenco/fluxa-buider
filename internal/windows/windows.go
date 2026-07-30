@@ -10,10 +10,48 @@ import (
 )
 
 const (
-	maxPESize    int64 = 512 * 1024 * 1024
-	maxICOSize   int64 = 16 * 1024 * 1024
-	maxICOImages       = 256
+	maxPESize         int64 = 512 * 1024 * 1024
+	maxICOSize        int64 = 16 * 1024 * 1024
+	maxICOImages            = 256
+	peSubsystemOffset       = int64(68)
+	subsystemGUI            = uint16(2)
+	subsystemConsole        = uint16(3)
 )
+
+// ConfigureTerminal selects the Windows PE subsystem used by the application
+// launcher. GUI applications do not create a console window; CLI applications do.
+func ConfigureTerminal(path string, terminal bool) error {
+	if err := ValidatePEAMD64(path); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- validated application launcher.
+	if err != nil {
+		return windowsError(ErrorIO, "open PE for subsystem update", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	var dos [64]byte
+	if _, err := file.ReadAt(dos[:], 0); err != nil || dos[0] != 'M' || dos[1] != 'Z' {
+		if err == nil {
+			err = errors.New("invalid DOS signature")
+		}
+		return windowsError(ErrorInvalid, "read DOS header", path, err)
+	}
+	peOffset := int64(binary.LittleEndian.Uint32(dos[0x3c:0x40]))
+	offset := peOffset + 4 + 20 + peSubsystemOffset
+	subsystem := subsystemGUI
+	if terminal {
+		subsystem = subsystemConsole
+	}
+	var encoded [2]byte
+	binary.LittleEndian.PutUint16(encoded[:], subsystem)
+	if _, err := file.WriteAt(encoded[:], offset); err != nil {
+		return windowsError(ErrorIO, "write PE subsystem", path, err)
+	}
+	if err := file.Sync(); err != nil {
+		return windowsError(ErrorIO, "sync PE subsystem", path, err)
+	}
+	return nil
+}
 
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 

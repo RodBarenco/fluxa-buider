@@ -1,14 +1,51 @@
 package windows_test
 
 import (
+	"debug/pe"
 	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
 )
+
+func TestConfigureTerminalUpdatesWindowsSubsystem(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires a native Windows PE test executable")
+	}
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "launcher.exe")
+	data, err := os.ReadFile(source) // #nosec G304 -- current test executable.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		terminal bool
+		want     uint16
+	}{{false, 2}, {true, 3}} {
+		if err := windowspkg.ConfigureTerminal(target, test.terminal); err != nil {
+			t.Fatal(err)
+		}
+		file, err := pe.Open(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := file.OptionalHeader.(*pe.OptionalHeader64)
+		if header.Subsystem != test.want {
+			t.Fatalf("Subsystem = %d, want %d", header.Subsystem, test.want)
+		}
+		_ = file.Close()
+	}
+}
 
 func TestValidateICOAcceptsBoundedPNGIcon(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "application.ico")

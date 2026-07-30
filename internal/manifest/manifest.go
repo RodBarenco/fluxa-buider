@@ -63,10 +63,11 @@ type Target struct {
 
 // Build records checks and security-relevant compilation properties.
 type Build struct {
-	Preflight     string `json:"preflight"`
-	ProgramFormat string `json:"program_format"`
-	Debug         bool   `json:"debug"`
-	SourceExposed bool   `json:"source_exposed"`
+	Preflight     string   `json:"preflight"`
+	ProgramFormat string   `json:"program_format"`
+	Debug         bool     `json:"debug"`
+	SourceExposed bool     `json:"source_exposed"`
+	Persistent    []string `json:"persistent,omitempty"`
 }
 
 // File maps a package path to the logical path used by the Fluxa project.
@@ -156,6 +157,7 @@ func New(ctx context.Context, input Input) (Manifest, error) {
 			ProgramFormat: string(input.Compilation.Format),
 			Debug:         input.Compilation.Debug,
 			SourceExposed: input.Compilation.SourceExposed,
+			Persistent:    append([]string(nil), input.Project.Build.Persistent...),
 		},
 		Files: files,
 	}
@@ -206,6 +208,16 @@ func Validate(value Manifest) error {
 	}
 	if len(value.Files) > maxFiles {
 		return manifestError(ErrorInvalid, "validate", "files", fmt.Errorf("exceeds maximum of %d files", maxFiles))
+	}
+	for index, pattern := range value.Build.Persistent {
+		if pattern == "" || strings.HasPrefix(pattern, "/") || strings.Contains(pattern, `\`) ||
+			strings.Contains(pattern, "..") {
+			return manifestError(ErrorInvalid, "validate", fmt.Sprintf("build.persistent[%d]", index),
+				errors.New("must be a safe project-relative slash pattern"))
+		}
+		if _, err := filepath.Match(pattern, "validation-probe"); err != nil {
+			return manifestError(ErrorInvalid, "validate", fmt.Sprintf("build.persistent[%d]", index), err)
+		}
 	}
 
 	paths := make(map[string]string, len(value.Files))
