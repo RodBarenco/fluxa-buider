@@ -43,6 +43,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "init":
+		if len(args) != 1 {
+			writeString(stderr, "error: init does not accept arguments\n")
+			_ = printUsage(stderr)
+			return 2
+		}
+		return runInit(os.Stdin, stdout, stderr, defaultBuildDependencies())
 	case "build":
 		return runBuild(args[1:], stdout, stderr, defaultBuildDependencies())
 	case "inspect":
@@ -86,7 +93,8 @@ func printUsage(w io.Writer) error {
 	_, err := fmt.Fprintf(w, `Fluxa Builder %s
 
 Usage:
-  fluxa-builder build [project] [--fluxa <path>] [--runtime-registry <path>]
+  fluxa-builder init
+  fluxa-builder build [project] [--fluxa <path>] [--output <dir>] [--runtime-registry <path>]
                         [--sign-key <path>] [--embed] [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
   fluxa-builder verify <file.flxpkg> [--signature <file.sig> --public-key <signing.pub>]
@@ -130,6 +138,7 @@ type buildOptions struct {
 	runtimeRegistry string
 	signKeyPath     string
 	embed           bool
+	outputOverride  string
 }
 
 type buildDependencies struct {
@@ -151,6 +160,7 @@ type buildDependencies struct {
 	smokeExecutable func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
 	executablePath  func() (string, error)
 	getenv          func(string) string
+	listRuntimes    func(string) ([]runtimepkg.Runtime, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
@@ -173,6 +183,7 @@ func defaultBuildDependencies() buildDependencies {
 		smokeExecutable: portable.SmokeExecutable,
 		executablePath:  os.Executable,
 		getenv:          os.Getenv,
+		listRuntimes:    runtimepkg.List,
 	}
 }
 
@@ -188,6 +199,12 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "error: failed to load project\ncaused by: %v\n", err)
 		return 1
+	}
+	if options.outputOverride != "" {
+		if err := cfg.SetOutput(options.outputOverride); err != nil {
+			_, _ = fmt.Fprintf(stderr, "error: invalid --output path\ncaused by: %v\n", err)
+			return 1
+		}
 	}
 	if cfg.Package.Format != "portable" {
 		_, _ = fmt.Fprintf(stderr, "error: package format %q is not implemented yet; use portable\n", cfg.Package.Format)
@@ -927,6 +944,12 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			}
 			index++
 			options.runtimeRegistry = args[index]
+		case "--output":
+			if index+1 >= len(args) {
+				return buildOptions{}, fmt.Errorf("--output requires a directory path")
+			}
+			index++
+			options.outputOverride = args[index]
 		case "--sign-key":
 			if index+1 >= len(args) {
 				return buildOptions{}, fmt.Errorf("--sign-key requires a private key path")

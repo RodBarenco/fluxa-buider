@@ -5,6 +5,13 @@ coexist with Fluxa's existing `[runtime]`, `[libs]`, `[ffi]`, and `[security]`
 tables. The current Fluxa loader ignores Builder tables and additional project
 metadata it does not use.
 
+`fluxa-builder init` can help write most of the Builder-specific fields
+described below interactively — see the "Guided setup" section of
+[README](../README.md). It never overwrites a field that is already present;
+every field it does offer to write is previewed and requires confirmation
+first, and every other byte of the file (including Fluxa's own tables and any
+comments) is left untouched.
+
 ## Minimal configuration
 
 ```toml
@@ -172,6 +179,15 @@ error after discovery: the Builder will not claim that an unreported version
 matches. Once Fluxa exposes a machine-readable version, this field will require
 an exact match.
 
+## Output directory override
+
+`build --output <dir>` overrides `build.output` for a single run without
+editing `fluxa.toml`. The value is validated with the exact same rule as the
+configured field: it must be relative, must not contain `..`, and must remain
+inside the project root once resolved; anything else is rejected before any
+work begins. `fluxa-builder init` uses this to preview an output directory and
+optionally offers to persist the choice into `fluxa.toml` afterward.
+
 ## Runtime registry
 
 The default registry is `~/.fluxa-builder/runtimes`. It can be inspected and
@@ -207,10 +223,14 @@ Builder home globally.
 }
 ```
 
-`packaged = true` marks a runtime compiled with
-`FLUXA_PACKAGED_RUNTIME=1`. Source-package builds require it. Such a runtime
-allows identity probing and the launcher's private entry, but refuses public
-CLI commands such as `run`, `dis`, `init`, and `apply`.
+`packaged = true` marks a runtime source-package builds trust to receive the
+launcher's private entry. On Windows this is a binary actually compiled with
+`FLUXA_PACKAGED_RUNTIME=1`, which refuses public CLI commands such as `run`,
+`dis`, `init`, and `apply` on its own. Neither native interpreter has such a
+mode on Linux or macOS (they share the same source); Fluxa Builder assembles
+a small embedded relay (`.fluxa-runtime`, see ADR 0025) that provides the
+same private-entry-only behavior in front of the plain, registered
+interpreter binary (`.fluxa-runtime.interpreter`).
 
 `runtime add` is an explicit local trust decision. It verifies paths,
 permissions, metadata, and hashes, but signed runtime provenance is not yet
@@ -227,6 +247,10 @@ For `package.format = "portable"`, a successful host build is published as:
 ├── <application>.flxpkg
 └── build-info.json
 ```
+
+On Linux and macOS, `.fluxa-runtime` is the embedded relay described above,
+and a sibling `.fluxa-runtime.interpreter` (the actual registered binary) is
+added alongside it.
 
 The visible executable is the Fluxa Builder launcher. It verifies the sibling
 package, restores packaged program files, preserves declared data, and invokes

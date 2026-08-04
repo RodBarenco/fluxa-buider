@@ -46,7 +46,7 @@ func TestRunPreservesDeclaredDataBetweenExecutions(t *testing.T) {
 		if err := os.WriteFile(sourcePath, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		logical := packagePath
+		var logical string
 		kind := "asset"
 		if packagePath == "program/source/main.flx" {
 			logical = "main.flx"

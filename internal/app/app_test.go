@@ -83,6 +83,82 @@ func TestInstalledLayoutForMacOSBundle(t *testing.T) {
 	}
 }
 
+// TestRunInstalledResolvesRelativeExecutablePath is a regression test for a
+// real bug this project's own end-to-end verification caught: os.Args[0] is
+// frequently relative (a user launching "./app" from its own directory).
+// filepath.Join(filepath.Dir("./app"), ".fluxa-runtime") produces
+// ".fluxa-runtime" — a path with no separator, which os/exec treats as a
+// bare command name to search $PATH for, not a path relative to the
+// current directory, and fails with "executable file not found in $PATH".
+// This never surfaced in any automated pipeline test because none of them
+// actually launched a produced application the way a real user does
+// (relative to its own directory); they only ever exercised
+// --fluxa-package-self-test, which RunInstalled answers before ever
+// touching RuntimePath.
+func TestRunInstalledResolvesRelativeExecutablePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell runtime fixture is POSIX-only")
+	}
+
+	root := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+	runtimePath := filepath.Join(root, installedRuntimeName)
+	if err := os.WriteFile(runtimePath, []byte("#!/bin/sh\necho relay-ran\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- executable test fixture.
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(root, "main.flx.src")
+	if err := os.WriteFile(sourcePath, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("main")
+	sum := sha256.Sum256(data)
+	value := manifest.Manifest{
+		FormatVersion: manifest.CurrentFormatVersion,
+		Project: manifest.Project{
+			Name: "Relative Path Test", ID: "com.example.relative-path-test",
+			Version: "1.0.0", Entry: "main.flx", Type: "desktop",
+		},
+		Toolchain: manifest.Toolchain{
+			Protocol: "runtime-info-v1", FluxaSHA256: strings.Repeat("a", 64), LibrariesSHA256: strings.Repeat("b", 64),
+		},
+		Target: manifest.Target{OS: runtime.GOOS, Arch: runtime.GOARCH},
+		Build: manifest.Build{
+			Preflight: "not_run", ProgramFormat: "fluxa-source",
+			Debug: true, SourceExposed: true,
+		},
+		Files: []manifest.File{{
+			Path: "program/source/main.flx", LogicalPath: "main.flx", Kind: "program",
+			Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]),
+		}},
+	}
+	packagePath := filepath.Join(root, "app.flxpkg")
+	if _, err := flxpkg.Write(context.Background(), flxpkg.Request{
+		OutputPath: packagePath, Manifest: value,
+		Sources: map[string]string{"program/source/main.flx": sourcePath}, Compress: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunInstalled("./app", nil, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("RunInstalled() code = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "relay-ran") {
+		t.Errorf("stdout = %q, want evidence the runtime fixture actually ran", stdout.String())
+	}
+}
+
 func TestRunHelp(t *testing.T) {
 	t.Parallel()
 
@@ -592,6 +668,16 @@ func TestParseBuildOptions(t *testing.T) {
 			name: "embedded executable",
 			args: []string{"my project", "--embed"},
 			want: buildOptions{projectPath: "my project", embed: true},
+		},
+		{
+			name: "output override",
+			args: []string{"my project", "--output", "build-output"},
+			want: buildOptions{projectPath: "my project", outputOverride: "build-output"},
+		},
+		{
+			name:      "missing output value",
+			args:      []string{"my project", "--output"},
+			wantError: "requires",
 		},
 		{
 			name:      "missing flag value",

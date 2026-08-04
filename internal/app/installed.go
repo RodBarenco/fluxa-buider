@@ -26,6 +26,16 @@ func IsInstalledInvocation(executable string) bool {
 
 // RunInstalled executes a portable application assembled by Fluxa Builder.
 func RunInstalled(executable string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// executable is typically os.Args[0], which is frequently relative
+	// (e.g. "./app" when launched from the same directory). A relative
+	// RuntimePath with no path separator (".fluxa-runtime") is not treated
+	// as cwd-relative by os/exec: it is looked up on $PATH like a bare
+	// command name and fails closed with "executable file not found in
+	// $PATH". Resolving to an absolute path here keeps every derived path
+	// unambiguous regardless of how the application was invoked.
+	if absolute, err := filepath.Abs(executable); err == nil {
+		executable = absolute
+	}
 	layout := installedLayoutFor(executable)
 	packagePath, err := installedPackage(layout.packageDirectory)
 	if err != nil {

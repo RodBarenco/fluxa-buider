@@ -1,7 +1,11 @@
 # Distribution Guide
 
 This guide describes the currently verified path from a tested Fluxa project
-to an application a non-technical user can open directly.
+to an application a non-technical user can open directly. `fluxa-builder init`
+can walk through steps 2 and 3 interactively and run step 4 automatically once
+setup is complete; see `docs/adr/0024-interactive-init-wizard.md`. This guide
+remains the reference for what that command does under the hood, and for
+doing any of it by hand.
 
 ## 1. Test the project first
 
@@ -92,15 +96,27 @@ Use `--registry` and `--runtime-registry` to select a non-default registry.
 The current development pipeline uses `program_formats: ["fluxa-source"]`.
 It also requires `"packaged": true`.
 
-Build the distribution variant of Fluxa with:
+How the interpreter binary itself is built differs by target, because only
+Windows needs a separate, restricted entrypoint:
 
-```sh
-make FLUXA_GRAPH_RAYLIB=1 build-packaged
-```
-
-Choose the target-specific backend flags required by the application. The
-resulting `fluxa_runtime` is not a development CLI. Direct commands such as
-`fluxa_runtime run arbitrary.flx` exit with code 126.
+- **Linux and macOS**: build the plain native interpreter — `make build` in
+  the `fluxa-lang` checkout, with whatever optional backend flags the
+  project's libraries need (see that repository's `fluxa.libs`). Neither
+  native entrypoint has a private-launcher mode of its own; Fluxa Builder
+  supplies it. `fluxa-builder build` assembles a small embedded relay,
+  cross-compiled per architecture, as `.fluxa-runtime` that speaks the
+  private protocol and execs this registered binary (placed beside it as
+  `.fluxa-runtime.interpreter`) with its already-working
+  `run <entry> -proj .` command. Direct execution of `.fluxa-runtime` itself
+  — the relay, not the interpreter — refuses with exit code 126. See
+  ADR 0025. (The macOS relay is cross-compiled and hash-verified but not
+  yet confirmed on real macOS hardware.)
+- **Windows**: build the real packaged variant —
+  `make build-windows-packaged` in the `fluxa-lang` checkout (see
+  `docs/WINDOWS.md` there). That binary is compiled with
+  `FLUXA_PACKAGED_RUNTIME=1` and already refuses public commands such as
+  `fluxa-runtime.exe run arbitrary.flx` with exit code 126 on its own; Fluxa
+  Builder registers and ships it unmodified as `.fluxa-runtime.exe`.
 
 ## 4. Build
 
@@ -121,6 +137,7 @@ dist/linux-x64/
 ├── <application>/
 │   ├── <application>
 │   ├── .fluxa-runtime
+│   ├── .fluxa-runtime.interpreter
 │   ├── <application>.flxpkg
 │   ├── build-info.json
 │   └── linux-runtime.json

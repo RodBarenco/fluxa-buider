@@ -19,6 +19,7 @@ import (
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
+	"github.com/RodBarenco/fluxa-builder/internal/wrapper"
 )
 
 // Request contains verified inputs for one portable directory.
@@ -162,7 +163,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		executableMode = 0o600
 	}
 	runtimeHash := ""
-	privateRuntimePath := ""
+	var runtimeExtraFiles []string
 	if request.LauncherPath == "" {
 		runtimeHash, err = copyAndHash(ctx, request.Runtime.BinaryPath, executablePath, executableMode)
 		if err != nil {
@@ -177,18 +178,28 @@ func Build(ctx context.Context, request Request) (Result, error) {
 				return Result{}, portableError(ErrorInvalid, "configure Windows terminal mode", executablePath, err)
 			}
 		}
-		privateRuntimeName := ".fluxa-runtime"
-		if request.TargetOS == "windows" {
-			privateRuntimeName += ".exe"
-		}
-		privateRuntimePath = filepath.Join(directory, privateRuntimeName)
-		runtimeMode := os.FileMode(0o700)
-		if request.TargetOS == "windows" {
-			runtimeMode = 0o600
-		}
-		runtimeHash, err = copyAndHash(ctx, request.Runtime.BinaryPath, privateRuntimePath, runtimeMode)
-		if err != nil {
-			return Result{}, err
+		if request.TargetOS == "linux" {
+			var privateRuntimePath, interpreterPath string
+			privateRuntimePath, interpreterPath, runtimeHash, err = assembleLinuxRuntime(ctx, directory, request.Runtime)
+			if err != nil {
+				return Result{}, err
+			}
+			runtimeExtraFiles = []string{privateRuntimePath, interpreterPath}
+		} else {
+			privateRuntimeName := ".fluxa-runtime"
+			if request.TargetOS == "windows" {
+				privateRuntimeName += ".exe"
+			}
+			privateRuntimePath := filepath.Join(directory, privateRuntimeName)
+			runtimeMode := os.FileMode(0o700)
+			if request.TargetOS == "windows" {
+				runtimeMode = 0o600
+			}
+			runtimeHash, err = copyAndHash(ctx, request.Runtime.BinaryPath, privateRuntimePath, runtimeMode)
+			if err != nil {
+				return Result{}, err
+			}
+			runtimeExtraFiles = []string{privateRuntimePath}
 		}
 	}
 	if runtimeHash != request.Runtime.Metadata.BinarySHA256 {
@@ -211,10 +222,8 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		}
 	}
 
-	extraFiles := make([]string, 0, 2)
-	if privateRuntimePath != "" {
-		extraFiles = append(extraFiles, privateRuntimePath)
-	}
+	extraFiles := make([]string, 0, 2+len(runtimeExtraFiles))
+	extraFiles = append(extraFiles, runtimeExtraFiles...)
 	windowsIconName := ""
 	windowsInfoName := ""
 	linuxIconName := ""
@@ -370,6 +379,42 @@ func validateRuntime(value runtimepkg.Runtime, osName, arch string, terminal boo
 		if err := macospkg.ValidateMachO(value.BinaryPath, arch); err != nil {
 			return portableError(ErrorInvalid, "validate macOS runtime Mach-O", value.BinaryPath, err)
 		}
+	}
+	return nil
+}
+
+// assembleLinuxRuntime writes the embedded Linux "adapted runtime" relay as
+// .fluxa-runtime and copies the verified interpreter beside it as
+// .fluxa-runtime.interpreter. The native Linux Fluxa interpreter has no
+// private launcher protocol of its own (unlike the Windows
+// FLUXA_PACKAGED_RUNTIME entrypoint), so the relay is what actually
+// receives internal/runner.go's private call and translates it into the
+// interpreter's already-working `run <entry> -proj .` command. See
+// docs/adr/0025-linux-adapted-runtime-wrapper.md.
+func assembleLinuxRuntime(ctx context.Context, directory string, runtime runtimepkg.Runtime) (privateRuntimePath, interpreterPath, runtimeHash string, err error) {
+	privateRuntimePath = filepath.Join(directory, ".fluxa-runtime")
+	if err := writeBytesExclusive(privateRuntimePath, wrapper.LinuxAMD64, 0o700); err != nil {
+		return "", "", "", portableError(ErrorIO, "write Linux runtime relay", privateRuntimePath, err)
+	}
+	interpreterPath = filepath.Join(directory, ".fluxa-runtime.interpreter")
+	runtimeHash, err = copyAndHash(ctx, runtime.BinaryPath, interpreterPath, 0o700)
+	if err != nil {
+		return "", "", "", err
+	}
+	return privateRuntimePath, interpreterPath, runtimeHash, nil
+}
+
+func writeBytesExclusive(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) // #nosec G304 -- confined output path.
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := errors.Join(file.Sync(), file.Close()); err != nil {
+		return err
 	}
 	return nil
 }

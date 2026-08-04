@@ -47,6 +47,28 @@ make build
 ./bin/fluxa-builder version
 ```
 
+## Guided setup
+
+```sh
+fluxa-builder init
+```
+
+Detects the host platform, asks for the project directory, and helps fill in
+`fluxa.toml` before writing anything — every write is shown and confirmed
+first. It covers the required `[project]` fields (`name`, `id`, `version`,
+`entry`) and, once the project loads, the rest of the Builder-specific
+surface a project usually wants: `build.assets`, `build.exclude`,
+`build.persistent`/`build.export`, `package.include_source`, the host
+platform's `targets.<os>.icon` (and `bundle_id` on macOS), and optionally
+`toolchain.path`. Every field already set in `fluxa.toml` is left untouched
+and simply skipped. It also previews the output location (defaulting to the
+project's configured `dist`). If a Fluxa toolchain and a registered runtime
+are already available it runs the real build; otherwise it prints the manual
+setup steps (cloning `fluxa-lang`, `make build-packaged`, `runtime add`) and a
+starting `runtime.json` template. Automatic download-and-build of the
+toolchain is intentionally not implemented yet; see
+`docs/adr/0024-interactive-init-wizard.md`.
+
 On Windows:
 
 ```powershell
@@ -75,7 +97,15 @@ the named launcher, a private Fluxa runtime, and the verified FLXPKG. Internal
 persistent data uses XDG; explicitly exported user files appear beside a
 writable portable application or under Documents for read-only installations.
 glibc compatibility follows the selected runtime binary; the Builder does not
-relink or rewrite it.
+relink or rewrite it. That private runtime is itself two files: a small
+Builder-generated relay (`.fluxa-runtime`) that speaks the private launcher
+protocol, and the verified, registered interpreter beside it
+(`.fluxa-runtime.interpreter`) — the native Linux interpreter has no private
+mode of its own, unlike Windows. macOS uses the identical relay (it shares
+the same native interpreter source as Linux), cross-compiled per
+architecture and placed the same way inside `Contents/MacOS/`; unlike
+Linux, this has not yet been verified end to end on real macOS hardware.
+See `docs/adr/0025-linux-adapted-runtime-wrapper.md`.
 
 macOS builds produce a conventional `.app` containing a named launcher and
 private thin x64 or arm64 Mach-O runtime under `Contents/MacOS`, the FLXPKG
@@ -123,7 +153,15 @@ fluxa-builder build . --sign-key /secure/signing.key
 ```
 
 `FLUXA_SIGN_KEY` may contain the key path instead. The explicit flag takes
-precedence. Verify a signed package with the trusted raw 32-byte public key:
+precedence. An explicit output directory can also override `build.output` for
+one run without editing `fluxa.toml`, subject to the same relative,
+no-traversal, stays-inside-the-project rule:
+
+```sh
+fluxa-builder build . --output build-output
+```
+
+Verify a signed package with the trusted raw 32-byte public key:
 
 ```sh
 fluxa-builder verify application.flxpkg --public-key /trusted/signing.pub

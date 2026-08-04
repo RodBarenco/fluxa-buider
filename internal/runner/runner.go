@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
+	"github.com/RodBarenco/fluxa-builder/internal/runtimeprotocol"
 )
 
 // Request describes a package execution using the existing Fluxa script runtime.
@@ -37,7 +38,7 @@ func Run(ctx context.Context, request Request) error {
 		return fmt.Errorf("create private runtime workspace: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
-	if err := os.Chmod(workspace, 0o700); err != nil {
+	if err := os.Chmod(workspace, 0o700); err != nil { // #nosec G302 -- private temp directory needs the execute bit to be traversable.
 		return fmt.Errorf("secure runtime workspace: %w", err)
 	}
 
@@ -85,11 +86,9 @@ func Run(ctx context.Context, request Request) error {
 	var command *exec.Cmd
 	if request.PackagedRuntime {
 		command = exec.CommandContext(ctx, request.RuntimePath, // #nosec G204 -- verified packaged runtime.
-			"__fluxa_builder_run_v1", entry, projectRoot)
+			runtimeprotocol.Command, entry, projectRoot)
 		command.Env = append(os.Environ(),
-			"FLUXA_BUILDER_RUNTIME_AUTH="+
-				"fluxa-builder-packaged-runtime-v1:"+
-				"4f726967696e2d6c6f636b65642d72756e74696d65")
+			runtimeprotocol.AuthEnvVar+"="+runtimeprotocol.AuthValue)
 	} else {
 		command = exec.CommandContext(ctx, request.RuntimePath, "run", entry, "-proj", ".") // #nosec G204 -- caller-selected development runtime.
 	}
@@ -150,7 +149,7 @@ func mergeTree(sourceRoot, destinationRoot string, persistent []string, program 
 		} else if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		return os.Rename(path, target)
+		return os.Rename(path, target) // #nosec G122 -- path is WalkDir's own entry within a just-extracted, verified package tree.
 	})
 }
 
@@ -197,7 +196,7 @@ func removeProgramSources(root string) error {
 			return err
 		}
 		if !entry.IsDir() && strings.EqualFold(filepath.Ext(path), ".flx") {
-			return os.Remove(path)
+			return os.Remove(path) // #nosec G122 -- path is WalkDir's own entry within the private persistent project root.
 		}
 		return nil
 	})

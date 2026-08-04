@@ -18,6 +18,21 @@ config → validation → toolchain → collection/source staging
 
 Builds use an isolated workspace and publish final artifacts atomically.
 
+## Interactive setup layer
+
+`fluxa-builder init` (`internal/app/init.go`) is a thin interactive layer in
+front of this pipeline, not a second implementation of it: once a toolchain
+and a registered runtime are found, it constructs the equivalent `build`
+arguments and calls the same `runBuild` entry point used by the non-interactive
+CLI. Its only independent logic is guidance — detecting the host, walking the
+user through required and optional `fluxa.toml` fields, and printing manual
+toolchain/runtime setup steps when nothing is ready yet. All of its
+`fluxa.toml` edits go through `internal/project`'s additive editor
+(`EnsureStringField`/`EnsureBoolField`/`EnsureStringArrayField`), which never
+modifies or removes an existing key and rewrites the file atomically. See
+ADR 0024 for the full design and its deliberately excluded scope (automatic
+toolchain download-and-build).
+
 ## Transactional workspace
 
 Each build uses `.fluxa-builder/work/<random-id>` below the canonical project
@@ -109,6 +124,19 @@ single exact match exists.
 Portable output contains a renamed Fluxa Builder launcher, a private
 `.fluxa-runtime[.exe]`, a same-basename `.flxpkg`, and `build-info.json`.
 Assembly and hash verification happen inside the transactional workspace.
+
+On Linux and macOS, `.fluxa-runtime` is not the registered runtime binary
+directly: it is a small embedded relay (`cmd/fluxa-runtime-wrapper`) that
+speaks the private launcher protocol and execs a sibling
+`.fluxa-runtime.interpreter` (the registered, hash-verified binary) with the
+interpreter's own `run <entry> -proj .` command. Neither platform's native
+Fluxa interpreter has a private-protocol entrypoint of its own — unlike
+Windows's `FLUXA_PACKAGED_RUNTIME` mode — so the Builder provides the relay
+itself, cross-compiled per target (`linux/amd64`, `darwin/amd64`,
+`darwin/arm64`). The macOS relay is verified by cross-compilation and a
+byte-for-byte drift test against its committed binary, the same as Linux,
+but has not yet been exercised end to end on real macOS hardware.
+See ADR 0025.
 
 The launcher, rather than the language runtime, owns the distribution contract:
 

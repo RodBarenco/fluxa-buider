@@ -181,7 +181,11 @@ func assertMacOSArchive(t *testing.T, archivePath, root string) {
 			seenExecutables++
 		}
 	}
-	if count != 10 || seenExecutables != 2 {
+	// 10 base entries plus .fluxa-runtime.interpreter (see
+	// docs/adr/0025-linux-adapted-runtime-wrapper.md); three 0700 files now
+	// live in Contents/MacOS/: the app executable, the embedded relay
+	// (.fluxa-runtime), and the verified interpreter beside it.
+	if count != 11 || seenExecutables != 3 {
 		t.Fatalf("tar entries = %d, executable Mach-O files = %d", count, seenExecutables)
 	}
 }

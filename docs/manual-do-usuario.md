@@ -8,6 +8,46 @@ final.
 > O macOS produz um `.app` funcional para testes, mas a distribuição pública
 > ainda precisa de assinatura Developer ID e notarização da Apple.
 
+## Caminho guiado: `fluxa-builder init`
+
+Depois de compilar o Builder (seção 2) e testar o projeto Fluxa manualmente
+(seção 3), o comando interativo abaixo ajuda nas seções 4, 5 e 6 sem exigir
+que você já saiba de cor todos os comandos e campos:
+
+```sh
+fluxa-builder init
+```
+
+Ele detecta o sistema automaticamente e, na ordem, pergunta:
+
+1. o diretório do projeto (caminho completo). Se `fluxa.toml` estiver
+   ausente ou faltar `name`, `id`, `version` ou `entry`, o wizard oferece
+   preencher cada campo — sempre mostrando a linha exata antes de gravar e
+   pedindo confirmação;
+2. as configurações opcionais mais comuns descritas na seção 4 —
+   `build.assets`, `build.exclude`, `build.persistent`/`build.export`,
+   `package.include_source`, e o ícone/`bundle_id` da sua plataforma atual —
+   pulando silenciosamente qualquer campo que já esteja definido no
+   `fluxa.toml`;
+3. qual plataforma gerar. Esta etapa é apenas informativa: como o teste de
+   fumaça precisa executar o aplicativo gerado, só é possível construir e
+   publicar o alvo desta própria máquina numa mesma execução; para os
+   demais, rode o wizard novamente em uma máquina (ou runner de CI) daquele
+   sistema;
+4. onde salvar a saída, com a opção de gravar essa escolha em
+   `build.output`;
+5. se deve tentar baixar e compilar o toolchain da Fluxa automaticamente.
+   Essa opção ainda **não está implementada** — a resposta "sim" apenas
+   explica isso e cai no guia manual (equivalente às seções 5 e 6 abaixo),
+   incluindo um `runtime.json` inicial já preenchido com o que for possível
+   calcular (hash de `fluxa.libs`, hash do binário do runtime se você já
+   tiver um pronto, etc.).
+
+Quando um toolchain `fluxa` e ao menos um runtime já estão registrados, o
+wizard pula direto para gerar a aplicação de verdade (equivalente à
+seção 6), usando o mesmo pipeline documentado abaixo — nenhuma etapa é
+reimplementada nem simplificada.
+
 ## 1. Pré-requisitos
 
 Na máquina do sistema que será empacotado, instale ou prepare:
@@ -112,19 +152,33 @@ já jogado em `assets`.
 
 ## 5. Preparar o runtime protegido
 
-No repositório da linguagem Fluxa, gere a variante de distribuição com os
-backends necessários ao projeto. Exemplo:
+Como o runtime é preparado depende do sistema, porque só o Windows precisa
+de um binário compilado de forma diferente:
 
-```sh
-make FLUXA_GRAPH_RAYLIB=1 build-packaged
-```
+- **Linux e macOS**: no repositório `fluxa-lang`, compile o interpretador
+  nativo normal com `make build`, usando os backends necessários ao projeto
+  (veja `fluxa.libs` naquele repositório) — os dois sistemas compartilham o
+  mesmo `src/main.c`. Nenhum dos dois entrypoints nativos tem um modo
+  privado próprio — o Fluxa Builder monta, no momento do `build`, um pequeno
+  relay embutido (compilado por arquitetura) como `.fluxa-runtime` que fala
+  o protocolo privado do launcher e executa esse binário registrado
+  (colocado ao lado como `.fluxa-runtime.interpreter`) com o comando já
+  existente `run <entry> -proj .`. Ver ADR 0025 (em inglês, `docs/adr/`). O
+  relay do macOS foi cross-compilado e validado por hash, mas ainda não
+  confirmado de ponta a ponta em hardware macOS real — só o Linux passou
+  por esse teste até agora.
+- **Windows**: compile a variante realmente empacotada com
+  `make build-windows-packaged` (veja `docs/WINDOWS.md` no repositório
+  `fluxa-lang`). Esse binário é compilado com `FLUXA_PACKAGED_RUNTIME=1` e já
+  recusa sozinho comandos públicos como:
 
-Essa variante deve ter sido compilada com `FLUXA_PACKAGED_RUNTIME=1`. Ela aceita
-o protocolo privado do launcher, mas recusa comandos públicos como:
+  ```powershell
+  fluxa-runtime.exe run qualquer-arquivo.flx
+  ```
 
-```sh
-fluxa-runtime run qualquer-arquivo.flx
-```
+Em ambos os casos, o resultado final recusa uso direto/público com código de
+saída 126 — no Linux porque o relay do Builder recusa, no Windows porque o
+próprio binário recusa.
 
 O runtime precisa corresponder ao alvo:
 
@@ -175,6 +229,14 @@ Se estiver usando um registro alternativo:
 fluxa-builder build . \
   --include-source \
   --runtime-registry ./meus-runtimes
+```
+
+Para gravar em um diretório diferente de `build.output` sem editar o
+`fluxa.toml`, use `--output` (sujeito à mesma regra de segurança: caminho
+relativo, sem `..`, permanecendo dentro do projeto):
+
+```sh
+fluxa-builder build . --include-source --output build-output
 ```
 
 O Builder:

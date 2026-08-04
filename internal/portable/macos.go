@@ -11,6 +11,7 @@ import (
 
 	macospkg "github.com/RodBarenco/fluxa-builder/internal/macos"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
+	"github.com/RodBarenco/fluxa-builder/internal/wrapper"
 )
 
 func buildMacOS(ctx context.Context, request Request) (Result, error) {
@@ -47,17 +48,29 @@ func buildMacOS(ctx context.Context, request Request) (Result, error) {
 		}
 	}
 
+	// The native macOS Fluxa interpreter has no private launcher protocol of
+	// its own, same as Linux (see docs/adr/0025-linux-adapted-runtime-wrapper.md):
+	// .fluxa-runtime is the embedded relay, and the verified interpreter is
+	// placed beside it as .fluxa-runtime.interpreter.
 	privateRuntime := filepath.Join(macOSDir, ".fluxa-runtime")
-	runtimeHash, err := copyAndHash(ctx, request.Runtime.BinaryPath, privateRuntime, 0o700)
+	interpreterPath := filepath.Join(macOSDir, ".fluxa-runtime.interpreter")
+	relayBinary, err := macOSWrapperBinary(request.TargetArch)
+	if err != nil {
+		return Result{}, portableError(ErrorInvalid, "select macOS runtime relay", request.TargetArch, err)
+	}
+	if err := writeBytesExclusive(privateRuntime, relayBinary, 0o700); err != nil {
+		return Result{}, portableError(ErrorIO, "write macOS runtime relay", privateRuntime, err)
+	}
+	runtimeHash, err := copyAndHash(ctx, request.Runtime.BinaryPath, interpreterPath, 0o700)
 	if err != nil {
 		return Result{}, err
 	}
 	if runtimeHash != request.Runtime.Metadata.BinarySHA256 {
-		return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", privateRuntime, errors.New("runtime SHA-256 mismatch"))
+		return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", interpreterPath, errors.New("runtime SHA-256 mismatch"))
 	}
 	if request.Runtime.Metadata.FormatVersion != 0 {
-		if err := macospkg.ValidateMachO(privateRuntime, request.TargetArch); err != nil {
-			return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", privateRuntime, err)
+		if err := macospkg.ValidateMachO(interpreterPath, request.TargetArch); err != nil {
+			return Result{}, portableError(ErrorIntegrity, "verify copied macOS runtime", interpreterPath, err)
 		}
 	}
 
@@ -73,7 +86,7 @@ func buildMacOS(ctx context.Context, request Request) (Result, error) {
 		return Result{}, portableError(ErrorIntegrity, "verify copied macOS package", packagePath, err)
 	}
 
-	extra := []string{privateRuntime}
+	extra := []string{privateRuntime, interpreterPath}
 	iconName := ""
 	if request.MacOSIcon != "" {
 		if err := macospkg.ValidateICNS(request.MacOSIcon); err != nil {
@@ -147,6 +160,20 @@ type plistInfo struct {
 	Version    string
 	Executable string
 	Icon       string
+}
+
+// macOSWrapperBinary selects the embedded relay matching the target
+// architecture. Both are cross-compiled from the same source as the Linux
+// relay; see internal/wrapper.
+func macOSWrapperBinary(arch string) ([]byte, error) {
+	switch arch {
+	case "amd64":
+		return wrapper.DarwinAMD64, nil
+	case "arm64":
+		return wrapper.DarwinARM64, nil
+	default:
+		return nil, fmt.Errorf("unsupported macOS architecture %q", arch)
+	}
 }
 
 func writeInfoPlist(path string, value plistInfo) error {

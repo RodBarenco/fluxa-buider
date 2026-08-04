@@ -25,7 +25,7 @@ func TestConfigureTerminalUpdatesWindowsSubsystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, data, 0o600); err != nil {
+	if err := os.WriteFile(target, data, 0o600); err != nil { // #nosec G703 -- target is a t.TempDir() path built above, not external input.
 		t.Fatal(err)
 	}
 	for _, test := range []struct {

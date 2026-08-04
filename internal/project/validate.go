@@ -15,6 +15,32 @@ var (
 	windowsDrivePath = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 )
 
+// ValidProjectID reports whether id satisfies the same reverse-domain rule
+// applied to project.id (and targets.macos.bundle_id) during validation.
+func ValidProjectID(id string) bool {
+	return projectIDPattern.MatchString(id)
+}
+
+// ValidSemVer reports whether version satisfies the same semantic version
+// rule applied to project.version during validation.
+func ValidSemVer(version string) bool {
+	return semverPattern.MatchString(version)
+}
+
+// ValidPattern reports whether pattern satisfies the same safety and glob
+// syntax rules applied to each entry of build.assets, build.exclude,
+// build.persistent, and build.export during validation.
+func ValidPattern(pattern string) bool {
+	if pattern == "" || len(pattern) > maxPatternLength {
+		return false
+	}
+	if !isSafeRelativePath(pattern) {
+		return false
+	}
+	_, err := filepath.Match(pattern, "validation-probe")
+	return err == nil
+}
+
 func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Project.Name) == "" {
 		return validationError("project.name", cfg.Project.Name, "is required")
