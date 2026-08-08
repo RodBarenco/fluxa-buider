@@ -16,6 +16,7 @@ import (
 
 	linuxpkg "github.com/RodBarenco/fluxa-builder/internal/linux"
 	macospkg "github.com/RodBarenco/fluxa-builder/internal/macos"
+	"github.com/RodBarenco/fluxa-builder/internal/mesafallback"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
@@ -43,6 +44,16 @@ type Request struct {
 	LinuxIcon     string
 	MacOSIcon     string
 	BundleID      string
+	// WindowsMesaFallbackDir, when set, is a local directory already
+	// populated with the Mesa3D Windows software-OpenGL fallback DLLs
+	// (internal/mesafallback.EnsureCached's job, not this package's —
+	// Build stays a pure, no-network function and only copies from an
+	// already-ready local source, the same as WindowsIcon/LinuxIcon).
+	// Bundling it is always attempted for a Windows target when set, but
+	// failure only produces a Warning, never a build failure: it is a
+	// documented, optional compatibility enhancement (fluxa-lang's own
+	// docs/WINDOWS.md), not a functional requirement.
+	WindowsMesaFallbackDir string
 }
 
 // Result describes a staged portable directory.
@@ -57,6 +68,11 @@ type Result struct {
 	PackageHash string
 	RuntimeHash string
 	ExtraFiles  []string
+	// Warnings are non-fatal, expected degradations the caller should
+	// surface (e.g. Windows icon embedding skipped because the target PE
+	// had no header room for it) — the build still succeeded and
+	// published normally.
+	Warnings []string
 }
 
 type buildInfo struct {
@@ -96,7 +112,13 @@ type windowsInfo struct {
 	IconHash      string `json:"icon_sha256,omitempty"`
 }
 
-type linuxInfo struct {
+// LinuxInfo mirrors linux-runtime.json's schema. It is exported so the
+// installed launcher itself (internal/app.RunInstalled) can read back its
+// own project name, icon, and terminal mode at run time — it needs them to
+// (re)register its own desktop entry on every launch, since a portable
+// directory has no package-manager install step of its own to hook into.
+// See ReadLinuxInfo and docs/adr/0026-file-manager-icon-association.md.
+type LinuxInfo struct {
 	FormatVersion int    `json:"format_version"`
 	ProductName   string `json:"product_name"`
 	ProjectID     string `json:"project_id"`
@@ -110,6 +132,34 @@ type linuxInfo struct {
 	IconHash      string `json:"icon_sha256,omitempty"`
 	DataPolicy    string `json:"data_policy"`
 	LibcPolicy    string `json:"libc_policy"`
+	Terminal      bool   `json:"terminal"`
+}
+
+// maxLinuxInfoSize bounds ReadLinuxInfo's input: linux-runtime.json is a
+// small, Builder-generated metadata file, never anywhere close to this.
+const maxLinuxInfoSize = 64 * 1024
+
+// ReadLinuxInfo reads and parses a linux-runtime.json written by Build. The
+// file is Builder's own prior output, not arbitrary untrusted input, but
+// this still fails closed on anything that isn't a small, regular,
+// well-formed JSON file rather than trusting it blindly.
+func ReadLinuxInfo(path string) (LinuxInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return LinuxInfo{}, portableError(ErrorIO, "inspect linux-runtime.json", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxLinuxInfoSize {
+		return LinuxInfo{}, portableError(ErrorInvalid, "validate linux-runtime.json", path, errors.New("must be a small, non-symlink regular file"))
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- caller-selected path beside the running launcher.
+	if err != nil {
+		return LinuxInfo{}, portableError(ErrorIO, "read linux-runtime.json", path, err)
+	}
+	var value LinuxInfo
+	if err := json.Unmarshal(data, &value); err != nil {
+		return LinuxInfo{}, portableError(ErrorInvalid, "parse linux-runtime.json", path, err)
+	}
+	return value, nil
 }
 
 // Build assembles and verifies a private portable directory.
@@ -224,6 +274,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 
 	extraFiles := make([]string, 0, 2+len(runtimeExtraFiles))
 	extraFiles = append(extraFiles, runtimeExtraFiles...)
+	var warnings []string
 	windowsIconName := ""
 	windowsInfoName := ""
 	linuxIconName := ""
@@ -244,6 +295,34 @@ func Build(ctx context.Context, request Request) (Result, error) {
 				return Result{}, portableError(ErrorIntegrity, "verify copied Windows icon", iconPath, err)
 			}
 			extraFiles = append(extraFiles, iconPath)
+
+			// Best-effort: associate the icon with the executable itself
+			// (Explorer/taskbar), on top of the loose .ico file already
+			// shipped above. Only attempted when executablePath is a real
+			// application launcher copy (request.LauncherPath != "") — the
+			// same precondition ConfigureTerminal already requires above,
+			// since that is the only branch where executablePath is
+			// guaranteed to be a genuine PE (ConfigureTerminal's own
+			// ValidatePEAMD64 already ran against it). When there is no
+			// launcher, executablePath is the raw runtime binary itself, a
+			// simpler publication mode that already skips other PE-specific
+			// finalization for the same reason.
+			//
+			// A PE that has no header room for another section, or that
+			// already carries embedded resources, is a known, expected
+			// condition — not a build failure — so it degrades to a printed
+			// warning instead of aborting publication.
+			// See docs/adr/0026-file-manager-icon-association.md.
+			if request.LauncherPath != "" {
+				if err := windowspkg.EmbedIcon(executablePath, iconPath); err != nil {
+					var windowsErr *windowspkg.Error
+					if errors.As(err, &windowsErr) && windowsErr.Kind == windowspkg.ErrorUnsupported {
+						warnings = append(warnings, fmt.Sprintf("Windows icon was not embedded in the executable (shipped as %s instead): %v", windowsIconName, err))
+					} else {
+						return Result{}, portableError(ErrorIO, "embed Windows icon", executablePath, err)
+					}
+				}
+			}
 		}
 		windowsInfoName = "windows-version.json"
 		windowsInfoPath := filepath.Join(directory, windowsInfoName)
@@ -257,6 +336,15 @@ func Build(ctx context.Context, request Request) (Result, error) {
 			return Result{}, err
 		}
 		extraFiles = append(extraFiles, windowsInfoPath)
+
+		if request.WindowsMesaFallbackDir != "" {
+			mesaFiles, mesaErr := bundleWindowsMesaFallback(request.WindowsMesaFallbackDir, directory, executableName)
+			if mesaErr != nil {
+				warnings = append(warnings, fmt.Sprintf("Mesa3D software-rendering fallback was not bundled: %v", mesaErr))
+			} else {
+				extraFiles = append(extraFiles, mesaFiles...)
+			}
+		}
 	}
 	if request.TargetOS == "linux" {
 		iconHash := ""
@@ -277,17 +365,24 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		}
 		linuxInfoName = "linux-runtime.json"
 		linuxInfoPath := filepath.Join(directory, linuxInfoName)
-		if err := writeJSONFile(linuxInfoPath, linuxInfo{
+		if err := writeJSONFile(linuxInfoPath, LinuxInfo{
 			FormatVersion: 1, ProductName: request.ProjectName, ProjectID: request.ProjectID,
 			Version: request.Version, Architecture: request.TargetArch,
 			Executable: executableName, Package: packageName,
 			RuntimeHash: runtimeHash, PackageHash: packageHash,
 			Icon: linuxIconName, IconHash: iconHash,
 			DataPolicy: "xdg", LibcPolicy: "runtime-defined",
+			Terminal: request.Terminal,
 		}); err != nil {
 			return Result{}, err
 		}
 		extraFiles = append(extraFiles, linuxInfoPath)
+
+		scriptPath, err := writeDesktopInstallScript(directory, request.ProjectID, request.ProjectName, executableName, linuxIconName, request.Terminal)
+		if err != nil {
+			return Result{}, err
+		}
+		extraFiles = append(extraFiles, scriptPath)
 	}
 
 	infoPath := filepath.Join(directory, "build-info.json")
@@ -338,6 +433,7 @@ func Build(ctx context.Context, request Request) (Result, error) {
 		Package: packagePath, BuildInfo: infoPath, Signature: signaturePath,
 		PackageHash: packageHash, RuntimeHash: runtimeHash,
 		ExtraFiles: append([]string(nil), extraFiles...),
+		Warnings:   append([]string(nil), warnings...),
 	}, nil
 }
 
@@ -391,6 +487,51 @@ func validateRuntime(value runtimepkg.Runtime, osName, arch string, terminal boo
 // receives internal/runner.go's private call and translates it into the
 // interpreter's already-working `run <entry> -proj .` command. See
 // docs/adr/0025-linux-adapted-runtime-wrapper.md.
+// writeDesktopInstallScript writes a POSIX shell script that registers the
+// application in the current user's application menu, so a file manager
+// (and the taskbar/launcher) shows the configured icon. It does not write a
+// .desktop file directly: a .desktop file's Exec/Icon fields need an
+// absolute path, and this portable directory's final location on disk is
+// not known at build time (nothing else this Builder generates —
+// build-info.json, linux-runtime.json, the manifest — embeds an
+// absolute or build-machine-specific path either, and this keeps that
+// property). The script resolves its own location at run time instead
+// (`dirname "$0"`) and is safe to re-run.
+func writeDesktopInstallScript(directory, projectID, projectName, executableName, iconName string, terminal bool) (string, error) {
+	desktopName := projectID
+	if desktopName == "" {
+		desktopName = executableName
+	}
+	name := strings.ReplaceAll(projectName, "\n", " ")
+	iconLine := ""
+	if iconName != "" {
+		iconLine = "Icon=$here/" + iconName + "\n"
+	}
+	script := fmt.Sprintf(
+		"#!/bin/sh\n"+
+			"# Registers %q in this user's application menu. Safe to re-run.\n"+
+			"set -e\n"+
+			"here=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"\n"+
+			"target=\"$HOME/.local/share/applications\"\n"+
+			"mkdir -p \"$target\"\n"+
+			"cat > \"$target/%s.desktop\" <<DESKTOP_EOF\n"+
+			"[Desktop Entry]\n"+
+			"Type=Application\n"+
+			"Name=%s\n"+
+			"Exec=$here/%s\n"+
+			"%sTerminal=%t\n"+
+			"Categories=Utility;\n"+
+			"DESKTOP_EOF\n"+
+			"echo \"Installed: $target/%s.desktop\"\n",
+		name, desktopName, name, executableName, iconLine, terminal, desktopName,
+	)
+	path := filepath.Join(directory, "install-desktop-shortcut.sh")
+	if err := writeBytesExclusive(path, []byte(script), 0o755); err != nil { // #nosec G306 -- script needs the execute bit; content has no secrets.
+		return "", portableError(ErrorIO, "write desktop install script", path, err)
+	}
+	return path, nil
+}
+
 func assembleLinuxRuntime(ctx context.Context, directory string, runtime runtimepkg.Runtime) (privateRuntimePath, interpreterPath, runtimeHash string, err error) {
 	privateRuntimePath = filepath.Join(directory, ".fluxa-runtime")
 	if err := writeBytesExclusive(privateRuntimePath, wrapper.LinuxAMD64, 0o700); err != nil {
@@ -462,6 +603,30 @@ func copyAndHash(ctx context.Context, sourcePath, destinationPath string, mode o
 
 func writeBuildInfo(path string, value buildInfo) error {
 	return writeJSONFile(path, value)
+}
+
+// bundleWindowsMesaFallback copies the Mesa3D Windows software-OpenGL
+// fallback DLLs (already cached locally by internal/mesafallback) beside
+// the executable, plus a "<executable>.local" marker file that enables
+// per-application DLL redirection so Windows loads these copies instead
+// of the system opengl32.dll — see
+// docs/adr/0027-automatic-toolchain-acquisition.md and fluxa-lang's own
+// docs/WINDOWS.md, which documents this exact mechanism and file set.
+func bundleWindowsMesaFallback(sourceDir, directory, executableName string) ([]string, error) {
+	files := make([]string, 0, len(mesafallback.DLLNames)+1)
+	for _, name := range mesafallback.DLLNames {
+		destination := filepath.Join(directory, name)
+		if _, err := copyAndHash(context.Background(), filepath.Join(sourceDir, name), destination, 0o600); err != nil {
+			return nil, err
+		}
+		files = append(files, destination)
+	}
+	localMarkerPath := filepath.Join(directory, executableName+".local")
+	if err := os.WriteFile(localMarkerPath, []byte("Enables application-local Mesa3D DLL redirection.\n"), 0o600); err != nil { // #nosec G304 -- confined output path.
+		return nil, portableError(ErrorIO, "write Mesa DLL redirection marker", localMarkerPath, err)
+	}
+	files = append(files, localMarkerPath)
+	return files, nil
 }
 
 func writeJSONFile(path string, value any) error {

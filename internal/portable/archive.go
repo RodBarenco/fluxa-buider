@@ -150,7 +150,7 @@ func archiveEntries(portable Result) ([]archiveEntry, error) {
 			return nil, portableError(ErrorInvalid, "validate archive input", path, errors.New("only non-symlink regular files are allowed"))
 		}
 		mode := os.FileMode(0o600)
-		if portable.TargetOS != "windows" && path == portable.Executable {
+		if portable.TargetOS != "windows" && entryInfo.Mode().Perm()&0o100 != 0 {
 			mode = 0o700
 		}
 		entries = append(entries, archiveEntry{path: path, relative: filepath.Base(path), mode: mode})
@@ -205,14 +205,14 @@ func macOSArchiveEntries(result Result) ([]archiveEntry, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("bundle entries must not be symlinks")
 		}
+		if !entry.IsDir() && !info.Mode().IsRegular() {
+			return errors.New("bundle entries must be directories or regular files")
+		}
 		mode := os.FileMode(0o600)
 		if entry.IsDir() {
 			mode = 0o755
-		} else if path == result.Executable ||
-			filepath.Base(path) == ".fluxa-runtime" {
+		} else if info.Mode().Perm()&0o100 != 0 {
 			mode = 0o700
-		} else if !info.Mode().IsRegular() {
-			return errors.New("bundle entries must be directories or regular files")
 		}
 		entries = append(entries, archiveEntry{
 			path: path, relative: relative, mode: mode, directory: entry.IsDir(),

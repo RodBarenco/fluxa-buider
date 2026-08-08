@@ -88,45 +88,68 @@ func ValidatePEAMD64(path string) error {
 
 // ValidateICO validates directory bounds and the basic shape of every ICO image.
 func ValidateICO(path string) error {
+	_, err := parseICO(path)
+	return err
+}
+
+// icoImage is one parsed, bounds-checked ICO directory entry: the raw
+// header fields a GRPICONDIRENTRY needs verbatim, plus the extracted image
+// bytes (PNG or DIB, exactly as ValidateICO already accepted).
+type icoImage struct {
+	width, height, colorCount uint8
+	planes, bitCount          uint16
+	data                      []byte
+}
+
+// parseICO is ValidateICO's validation logic, refactored to also return the
+// parsed per-image records EmbedIcon needs — the two must never disagree
+// about what is a valid ICO, so there is exactly one parser.
+func parseICO(path string) ([]icoImage, error) {
 	info, err := regularFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if info.Size() < 6+16 || info.Size() > maxICOSize {
-		return windowsError(ErrorLimit, "validate ICO size", path, errors.New("ICO size is outside supported bounds"))
+		return nil, windowsError(ErrorLimit, "validate ICO size", path, errors.New("ICO size is outside supported bounds"))
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- caller-selected ICO is validated as untrusted input.
 	if err != nil {
-		return windowsError(ErrorIO, "read ICO", path, err)
+		return nil, windowsError(ErrorIO, "read ICO", path, err)
 	}
 	reserved := binary.LittleEndian.Uint16(data[0:2])
 	imageType := binary.LittleEndian.Uint16(data[2:4])
 	count := int(binary.LittleEndian.Uint16(data[4:6]))
 	if reserved != 0 || imageType != 1 || count == 0 || count > maxICOImages {
-		return windowsError(ErrorInvalid, "validate ICO header", path, errors.New("invalid reserved, type, or image count"))
+		return nil, windowsError(ErrorInvalid, "validate ICO header", path, errors.New("invalid reserved, type, or image count"))
 	}
 	tableEnd := 6 + count*16
 	if tableEnd > len(data) {
-		return windowsError(ErrorInvalid, "validate ICO directory", path, errors.New("image directory is truncated"))
+		return nil, windowsError(ErrorInvalid, "validate ICO directory", path, errors.New("image directory is truncated"))
 	}
+	images := make([]icoImage, 0, count)
 	for index := 0; index < count; index++ {
 		entry := data[6+index*16 : 6+(index+1)*16]
 		size := uint64(binary.LittleEndian.Uint32(entry[8:12]))
 		offset := uint64(binary.LittleEndian.Uint32(entry[12:16]))
 		end, ok := checkedAdd(offset, size)
 		if size < 8 || offset < uint64(tableEnd) || !ok || end > uint64(len(data)) {
-			return windowsError(ErrorInvalid, "validate ICO image", path, fmt.Errorf("image %d has invalid bounds", index))
+			return nil, windowsError(ErrorInvalid, "validate ICO image", path, fmt.Errorf("image %d has invalid bounds", index))
 		}
 		image := data[offset:end]
-		if bytes.HasPrefix(image, pngSignature) {
-			continue
+		if !bytes.HasPrefix(image, pngSignature) {
+			dibSize := binary.LittleEndian.Uint32(image[0:4])
+			if dibSize != 40 && dibSize != 108 && dibSize != 124 {
+				return nil, windowsError(ErrorInvalid, "validate ICO image", path, fmt.Errorf("image %d is neither PNG nor supported DIB", index))
+			}
 		}
-		dibSize := binary.LittleEndian.Uint32(image[0:4])
-		if dibSize != 40 && dibSize != 108 && dibSize != 124 {
-			return windowsError(ErrorInvalid, "validate ICO image", path, fmt.Errorf("image %d is neither PNG nor supported DIB", index))
-		}
+		images = append(images, icoImage{
+			width: entry[0], height: entry[1], colorCount: entry[2],
+			planes:   binary.LittleEndian.Uint16(entry[4:6]),
+			bitCount: binary.LittleEndian.Uint16(entry[6:8]),
+			data:     image,
+		})
 	}
-	return nil
+	return images, nil
 }
 
 func regularFile(path string) (os.FileInfo, error) {

@@ -19,6 +19,7 @@ import (
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/containersmoke"
 	"github.com/RodBarenco/fluxa-builder/internal/embedded"
 	"github.com/RodBarenco/fluxa-builder/internal/installer"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
@@ -46,116 +47,6 @@ func TestRunVersion(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("Run(version) stderr = %q, want empty", stderr.String())
-	}
-}
-
-func TestInstalledInvocationDetection(t *testing.T) {
-	t.Parallel()
-
-	for _, executable := range []string{"/opt/bin/fluxa-builder", `C:\tools\fluxa-builder.exe`} {
-		if IsInstalledInvocation(executable) {
-			t.Fatalf("IsInstalledInvocation(%q) = true, want false", executable)
-		}
-	}
-	for _, executable := range []string{"/opt/games/starfight", `C:\Games\Starfight.exe`} {
-		if !IsInstalledInvocation(executable) {
-			t.Fatalf("IsInstalledInvocation(%q) = false, want true", executable)
-		}
-	}
-}
-
-func TestInstalledLayoutForMacOSBundle(t *testing.T) {
-	t.Parallel()
-
-	executable := filepath.Join(
-		string(filepath.Separator), "Applications", "Starfight.app",
-		"Contents", "MacOS", "starfight",
-	)
-	layout := installedLayoutFor(executable)
-	if want := filepath.Join(string(filepath.Separator), "Applications", "Starfight.app", "Contents", "Resources"); layout.packageDirectory != want {
-		t.Errorf("package directory = %q, want %q", layout.packageDirectory, want)
-	}
-	if want := filepath.Join(string(filepath.Separator), "Applications", "Starfight.app", "Contents", "MacOS"); layout.runtimeDirectory != want {
-		t.Errorf("runtime directory = %q, want %q", layout.runtimeDirectory, want)
-	}
-	if want := filepath.Join(string(filepath.Separator), "Applications"); layout.distributionDirectory != want {
-		t.Errorf("distribution directory = %q, want %q", layout.distributionDirectory, want)
-	}
-}
-
-// TestRunInstalledResolvesRelativeExecutablePath is a regression test for a
-// real bug this project's own end-to-end verification caught: os.Args[0] is
-// frequently relative (a user launching "./app" from its own directory).
-// filepath.Join(filepath.Dir("./app"), ".fluxa-runtime") produces
-// ".fluxa-runtime" — a path with no separator, which os/exec treats as a
-// bare command name to search $PATH for, not a path relative to the
-// current directory, and fails with "executable file not found in $PATH".
-// This never surfaced in any automated pipeline test because none of them
-// actually launched a produced application the way a real user does
-// (relative to its own directory); they only ever exercised
-// --fluxa-package-self-test, which RunInstalled answers before ever
-// touching RuntimePath.
-func TestRunInstalledResolvesRelativeExecutablePath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell runtime fixture is POSIX-only")
-	}
-
-	root := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
-	runtimePath := filepath.Join(root, installedRuntimeName)
-	if err := os.WriteFile(runtimePath, []byte("#!/bin/sh\necho relay-ran\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- executable test fixture.
-		t.Fatal(err)
-	}
-
-	sourcePath := filepath.Join(root, "main.flx.src")
-	if err := os.WriteFile(sourcePath, []byte("main"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	data := []byte("main")
-	sum := sha256.Sum256(data)
-	value := manifest.Manifest{
-		FormatVersion: manifest.CurrentFormatVersion,
-		Project: manifest.Project{
-			Name: "Relative Path Test", ID: "com.example.relative-path-test",
-			Version: "1.0.0", Entry: "main.flx", Type: "desktop",
-		},
-		Toolchain: manifest.Toolchain{
-			Protocol: "runtime-info-v1", FluxaSHA256: strings.Repeat("a", 64), LibrariesSHA256: strings.Repeat("b", 64),
-		},
-		Target: manifest.Target{OS: runtime.GOOS, Arch: runtime.GOARCH},
-		Build: manifest.Build{
-			Preflight: "not_run", ProgramFormat: "fluxa-source",
-			Debug: true, SourceExposed: true,
-		},
-		Files: []manifest.File{{
-			Path: "program/source/main.flx", LogicalPath: "main.flx", Kind: "program",
-			Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]),
-		}},
-	}
-	packagePath := filepath.Join(root, "app.flxpkg")
-	if _, err := flxpkg.Write(context.Background(), flxpkg.Request{
-		OutputPath: packagePath, Manifest: value,
-		Sources: map[string]string{"program/source/main.flx": sourcePath}, Compress: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	original, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(original) })
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := RunInstalled("./app", nil, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("RunInstalled() code = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "relay-ran") {
-		t.Errorf("stdout = %q, want evidence the runtime fixture actually ran", stdout.String())
 	}
 }
 
@@ -516,6 +407,206 @@ icon = "aplicação.ico"
 	}
 	if _, err := os.Stat(filepath.Join(root, "dist")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed smoke published dist: %v", err)
+	}
+}
+
+func TestResolveSmokeStrategy(t *testing.T) {
+	t.Parallel()
+
+	hostOS, hostArch := hostTargetOS()
+	tests := []struct {
+		name             string
+		targetOS         string
+		targetArch       string
+		want             smokeStrategy
+		wantRunnerNonNil bool
+	}{
+		{name: "native host match", targetOS: hostOS, targetArch: hostArch, want: smokeNative},
+		{name: "windows from any non-Windows host", targetOS: "windows", targetArch: "amd64", want: smokeWineContainer, wantRunnerNonNil: true},
+		{name: "linux from any non-Linux host", targetOS: "linux", targetArch: "amd64", want: smokeLinuxContainer, wantRunnerNonNil: true},
+		{name: "macos cross-build unsupported", targetOS: "macos", targetArch: "arm64", want: smokeUnsupported},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.targetOS == hostOS && tt.targetArch != hostArch {
+				t.Skip("this case only makes sense when the host actually has a mismatching arch")
+			}
+			// windows/linux cases only exercise the container path when
+			// they actually differ from the host — on a hypothetical
+			// windows or linux CI runner these would themselves resolve
+			// to smokeNative, which is already covered by the first case.
+			if (tt.targetOS == "windows" || tt.targetOS == "linux") && tt.targetOS == hostOS {
+				t.Skip("host already matches this target; covered by the native case")
+			}
+			got := resolveSmokeStrategy(tt.targetOS, tt.targetArch)
+			if got != tt.want {
+				t.Fatalf("resolveSmokeStrategy(%q, %q) = %v, want %v", tt.targetOS, tt.targetArch, got, tt.want)
+			}
+			runner := containerRunnerFor(got)
+			if tt.wantRunnerNonNil && runner == nil {
+				t.Fatalf("containerRunnerFor(%v) = nil, want a runner for a container strategy", got)
+			}
+			if !tt.wantRunnerNonNil && runner != nil {
+				t.Fatalf("containerRunnerFor(%v) = non-nil, want nil for %v", got, got)
+			}
+		})
+	}
+}
+
+// TestRunBuildVerifiesCrossTargetThroughContainerDependency proves runBuild
+// actually dispatches to the container-based smoke dependency (never the
+// native one) for a target the host cannot execute directly — the
+// concrete behavior docs/adr/0028 exists for: a Linux host must be able to
+// build and verify a Windows target (or vice versa) instead of silently
+// building for the host regardless of --target, which is what happened
+// before this ADR.
+func TestRunBuildVerifiesCrossTargetThroughContainerDependency(t *testing.T) {
+	t.Parallel()
+
+	hostOS, _ := hostTargetOS()
+	crossTarget, crossOS := "windows-x64", "windows"
+	if hostOS == "windows" {
+		crossTarget, crossOS = "linux-x64", "linux"
+	}
+
+	root := t.TempDir()
+	config := `[project]
+name = "Cross Target Test"
+id = "com.example.cross-target"
+version = "1.0.0"
+entry = "main.flx"
+`
+	if err := os.WriteFile(filepath.Join(root, "fluxa.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.flx"), []byte(`print("ok")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(root, "runtime-fixture")
+	runtimeBytes := []byte("runtime fixture")
+	if err := os.WriteFile(runtimePath, runtimeBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(runtimePath, 0o700); err != nil { // #nosec G302 -- executable runtime fixture.
+		t.Fatal(err)
+	}
+	runtimeHash := sha256.Sum256(runtimeBytes)
+
+	var containerCalls int
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	dependencies := buildDependencies{
+		resolve: func(toolchain.ResolveOptions) (toolchain.Candidate, error) {
+			return toolchain.Candidate{Path: "/opt/fluxa/bin/fluxa", Source: toolchain.SourceExplicit}, nil
+		},
+		probe: func(context.Context, string, time.Duration) (toolchain.Identity, error) {
+			return toolchain.Identity{Protocol: "runtime-info-v1", SHA256: strings.Repeat("a", 64)}, nil
+		},
+		newWorkspace:  buildpkg.NewWorkspace,
+		collect:       collector.CollectProject,
+		compile:       compiler.Compile,
+		newManifest:   manifest.New,
+		writeManifest: manifest.WriteFile,
+		writePackage:  flxpkg.Write,
+		resolveRuntime: func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error) {
+			return runtimepkg.Runtime{
+				BinaryPath: runtimePath,
+				Metadata: runtimepkg.Metadata{
+					OS: crossOS, Arch: "amd64", Terminal: true,
+					BinarySHA256: hex.EncodeToString(runtimeHash[:]),
+				},
+			}, nil
+		},
+		buildPortable:   portable.Build,
+		archivePortable: portable.Archive,
+		buildDebian:     installer.Debian{}.Build,
+		smokePortable: func(context.Context, portable.Result, time.Duration) error {
+			t.Fatal("smokePortable (native) was called for a cross target; want the container dependency instead")
+			return nil
+		},
+		smokePortableContainer: func(ctx context.Context, result portable.Result, run portable.ContainerRunner, timeout time.Duration) error {
+			containerCalls++
+			if run == nil {
+				t.Fatal("smokePortableContainer called with a nil runner")
+			}
+			if result.TargetOS != crossOS {
+				t.Fatalf("smokePortableContainer result.TargetOS = %q, want %q", result.TargetOS, crossOS)
+			}
+			return nil
+		},
+		getenv: func(string) string { return "" },
+		ensureMesaFallback: func(context.Context, string) (string, error) {
+			return "", nil
+		},
+	}
+
+	code := runBuild([]string{
+		root, "--fluxa", "/opt/fluxa/bin/fluxa", "--include-source", "--target", crossTarget,
+	}, &stdout, &stderr, dependencies)
+
+	if code != 0 {
+		t.Fatalf("runBuild() code = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if containerCalls != 1 {
+		t.Fatalf("smokePortableContainer was called %d times, want 1", containerCalls)
+	}
+}
+
+// TestSmokeVerifyDegradesGracefullyOnContainerInfrastructureFailure proves
+// the docs/adr/0028 trade-off the project owner chose: when container
+// verification cannot even run at all (Docker missing, a Wine image
+// build/priming failure, a future Wine version regression — anything
+// surfaced as a *containersmoke.Error), the build still succeeds with a
+// warning, mirroring the existing Mesa3D fallback's own behavior for the
+// same class of failure — instead of blocking a cross-target build
+// outright over infrastructure it doesn't control.
+func TestSmokeVerifyDegradesGracefullyOnContainerInfrastructureFailure(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	containerErr := &containersmoke.Error{
+		Kind:      containersmoke.ErrorUnsupported,
+		Operation: "check prerequisites",
+		Detail:    "Docker is not installed or not reachable",
+	}
+	err := smokeVerify(&stdout, smokeWineContainer, "windows", "amd64",
+		func(context.Context) error {
+			t.Fatal("native was called for a container strategy")
+			return nil
+		},
+		func(context.Context, portable.ContainerRunner, time.Duration) error {
+			return containerErr
+		},
+	)
+	if err != nil {
+		t.Fatalf("smokeVerify() error = %v, want nil (should degrade gracefully)", err)
+	}
+	if !strings.Contains(stdout.String(), "WARNING:") || !strings.Contains(stdout.String(), "publishing without having run it") {
+		t.Fatalf("stdout = %q, want a warning explaining verification was skipped", stdout.String())
+	}
+}
+
+// TestSmokeVerifyStillFailsOnGenuineSelfTestFailure proves the other half
+// of that same trade-off: a failure that is NOT a *containersmoke.Error
+// — meaning the self-test process actually ran inside the container and
+// genuinely failed, timed out, or crashed — still fails the build. Only
+// "verification could not even run" degrades gracefully; "verification
+// ran and failed" does not.
+func TestSmokeVerifyStillFailsOnGenuineSelfTestFailure(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	genuineFailure := errors.New("portable run package self-test: runtime rejected package")
+	err := smokeVerify(&stdout, smokeLinuxContainer, "linux", "amd64",
+		func(context.Context) error { return nil },
+		func(context.Context, portable.ContainerRunner, time.Duration) error {
+			return genuineFailure
+		},
+	)
+	if !errors.Is(err, genuineFailure) {
+		t.Fatalf("smokeVerify() error = %v, want the genuine self-test failure to propagate unchanged", err)
 	}
 }
 

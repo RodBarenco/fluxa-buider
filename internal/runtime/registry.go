@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
+	"strings"
 
 	windowspkg "github.com/RodBarenco/fluxa-builder/internal/windows"
 )
@@ -235,6 +236,49 @@ func List(root string) ([]Runtime, error) {
 		return leftTarget < rightTarget
 	})
 	return runtimes, nil
+}
+
+// Remove deletes the registry slot value occupies.
+//
+// Add refuses to write into an occupied version/target/terminal slot, and
+// that slot is keyed on the *reported* Fluxa version — which is
+// "unreported" for every toolchain built today, since fluxa-lang still
+// exposes no machine-readable version. Two genuinely different runtimes
+// (built against different toolchains, or for projects with different
+// fluxa.libs) therefore collide in one slot, and the older one wins
+// forever unless it can be removed. This is that escape hatch: callers
+// must have established that the occupant is unusable, and must confirm
+// the deletion with the user first.
+//
+// value must come from List or Resolve — Directory is validated against
+// root and re-loaded before anything is deleted, so a hand-built Runtime
+// pointing somewhere else cannot be used to remove an arbitrary path.
+func Remove(root string, value Runtime) error {
+	root, err := ensureRegistryRoot(root)
+	if err != nil {
+		return err
+	}
+	directory, err := filepath.Abs(value.Directory)
+	if err != nil {
+		return runtimeError(ErrorIO, "resolve runtime directory", value.Directory, err)
+	}
+	directory = filepath.Clean(directory)
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return runtimeError(ErrorInvalid, "remove", directory, errors.New("runtime directory is outside the registry"))
+	}
+	// Re-Load rather than trusting the caller's copy: this both proves the
+	// directory really is a registry slot (metadata present and valid) and
+	// keeps the deletion from ever touching a directory that merely lives
+	// under the registry root.
+	if _, err := Load(directory); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		return runtimeError(ErrorIO, "remove runtime", directory, err)
+	}
+	return nil
 }
 
 // Resolve selects exactly one compatible verified runtime.

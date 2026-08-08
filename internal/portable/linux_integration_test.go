@@ -228,8 +228,10 @@ func assertLinuxArchive(t *testing.T, path, root string) {
 			t.Fatalf("unsafe tar entry %q", header.Name)
 		}
 	}
-	if count != 6 {
-		t.Fatalf("tar entries = %d, want root plus five regular files", count)
+	// root + executable + package + build-info.json + linux-runtime.json +
+	// icon + install-desktop-shortcut.sh.
+	if count != 7 {
+		t.Fatalf("tar entries = %d, want root plus six regular files", count)
 	}
 }
 

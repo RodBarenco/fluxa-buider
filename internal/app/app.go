@@ -15,9 +15,12 @@ import (
 	buildpkg "github.com/RodBarenco/fluxa-builder/internal/build"
 	"github.com/RodBarenco/fluxa-builder/internal/collector"
 	"github.com/RodBarenco/fluxa-builder/internal/compiler"
+	"github.com/RodBarenco/fluxa-builder/internal/containersmoke"
 	"github.com/RodBarenco/fluxa-builder/internal/embedded"
 	"github.com/RodBarenco/fluxa-builder/internal/installer"
+	"github.com/RodBarenco/fluxa-builder/internal/launcherbin"
 	"github.com/RodBarenco/fluxa-builder/internal/manifest"
+	"github.com/RodBarenco/fluxa-builder/internal/mesafallback"
 	flxpkg "github.com/RodBarenco/fluxa-builder/internal/package"
 	"github.com/RodBarenco/fluxa-builder/internal/portable"
 	"github.com/RodBarenco/fluxa-builder/internal/project"
@@ -25,6 +28,7 @@ import (
 	runtimepkg "github.com/RodBarenco/fluxa-builder/internal/runtime"
 	"github.com/RodBarenco/fluxa-builder/internal/signing"
 	"github.com/RodBarenco/fluxa-builder/internal/toolchain"
+	"github.com/RodBarenco/fluxa-builder/internal/toolchainbuild"
 )
 
 const (
@@ -94,8 +98,9 @@ func printUsage(w io.Writer) error {
 
 Usage:
   fluxa-builder init
-  fluxa-builder build [project] [--fluxa <path>] [--output <dir>] [--runtime-registry <path>]
-                        [--sign-key <path>] [--embed] [--include-source] [--keep-work]
+  fluxa-builder build [project] [--fluxa <path>] [--output <dir>] [--target <os>-<arch>]
+                        [--runtime-registry <path>] [--sign-key <path>] [--embed]
+                        [--include-source] [--keep-work]
   fluxa-builder inspect <file.flxpkg>
   fluxa-builder verify <file.flxpkg> [--signature <file.sig> --public-key <signing.pub>]
   fluxa-builder run-package <file.flxpkg> --fluxa <path>
@@ -139,51 +144,79 @@ type buildOptions struct {
 	signKeyPath     string
 	embed           bool
 	outputOverride  string
+	targetOverride  string
 }
 
 type buildDependencies struct {
-	resolve         func(toolchain.ResolveOptions) (toolchain.Candidate, error)
-	probe           func(context.Context, string, time.Duration) (toolchain.Identity, error)
-	newWorkspace    func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
-	collect         func(context.Context, *project.Config) (collector.Result, error)
-	compile         func(context.Context, compiler.Request) (compiler.Result, error)
-	newManifest     func(context.Context, manifest.Input) (manifest.Manifest, error)
-	writeManifest   func(string, manifest.Manifest) error
-	writePackage    func(context.Context, flxpkg.Request) (flxpkg.Result, error)
-	signPackage     func(string, string, string) (signing.Result, error)
-	resolveRuntime  func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
-	buildPortable   func(context.Context, portable.Request) (portable.Result, error)
-	smokePortable   func(context.Context, portable.Result, time.Duration) error
-	archivePortable func(context.Context, portable.Result, string) (portable.ArchiveResult, error)
-	buildDebian     func(context.Context, installer.Request) (installer.Result, error)
-	buildEmbedded   func(context.Context, embedded.Request) (embedded.Info, error)
-	smokeExecutable func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
-	executablePath  func() (string, error)
-	getenv          func(string) string
-	listRuntimes    func(string) ([]runtimepkg.Runtime, error)
+	resolve            func(toolchain.ResolveOptions) (toolchain.Candidate, error)
+	probe              func(context.Context, string, time.Duration) (toolchain.Identity, error)
+	newWorkspace       func(context.Context, string, buildpkg.WorkspaceOptions) (*buildpkg.Workspace, error)
+	collect            func(context.Context, *project.Config) (collector.Result, error)
+	compile            func(context.Context, compiler.Request) (compiler.Result, error)
+	newManifest        func(context.Context, manifest.Input) (manifest.Manifest, error)
+	writeManifest      func(string, manifest.Manifest) error
+	writePackage       func(context.Context, flxpkg.Request) (flxpkg.Result, error)
+	signPackage        func(string, string, string) (signing.Result, error)
+	resolveRuntime     func(string, runtimepkg.Requirement) (runtimepkg.Runtime, error)
+	buildPortable      func(context.Context, portable.Request) (portable.Result, error)
+	smokePortable      func(context.Context, portable.Result, time.Duration) error
+	archivePortable    func(context.Context, portable.Result, string) (portable.ArchiveResult, error)
+	buildDebian        func(context.Context, installer.Request) (installer.Result, error)
+	buildEmbedded      func(context.Context, embedded.Request) (embedded.Info, error)
+	smokeExecutable    func(context.Context, string, string, string, time.Duration) (portable.SmokeReport, error)
+	executablePath     func() (string, error)
+	getenv             func(string) string
+	listRuntimes       func(string) ([]runtimepkg.Runtime, error)
+	ensureMesaFallback func(context.Context, string) (string, error)
+	// launcherFor resolves the pre-built application launcher for a build's
+	// target OS/arch (internal/launcherbin.For), which is not necessarily
+	// this host's own — see stageLauncher.
+	launcherFor func(string, string) ([]byte, error)
+	// acquire is the init wizard's automatic toolchain/runtime build
+	// (docs/adr/0027). It is injectable for the same reason everything
+	// else here is: what the wizard does with a Result — above all which
+	// binary it probes for the toolchain identity it registers — is
+	// ordinary logic that must be testable without a real 25-minute
+	// container build, and a defect in exactly that logic is what broke
+	// the Windows flow.
+	acquire func(context.Context, toolchainbuild.Request, toolchainbuild.Confirmer) (toolchainbuild.Result, error)
+	// smokePortableContainer and smokeExecutableContainer are
+	// resolveSmokeStrategy's container-verified path (see docs/adr/0028):
+	// same self-test contract as smokePortable/smokeExecutable, but run
+	// inside a network-isolated Docker container via the given
+	// portable.ContainerRunner instead of natively, for a target the host
+	// cannot execute directly.
+	smokePortableContainer   func(context.Context, portable.Result, portable.ContainerRunner, time.Duration) error
+	smokeExecutableContainer func(context.Context, string, string, string, portable.ContainerRunner, time.Duration) (portable.SmokeReport, error)
 }
 
 func defaultBuildDependencies() buildDependencies {
 	return buildDependencies{
-		resolve:         toolchain.Resolve,
-		probe:           toolchain.Probe,
-		newWorkspace:    buildpkg.NewWorkspace,
-		collect:         collector.CollectProject,
-		compile:         compiler.Compile,
-		newManifest:     manifest.New,
-		writeManifest:   manifest.WriteFile,
-		writePackage:    flxpkg.Write,
-		signPackage:     signing.Sign,
-		resolveRuntime:  runtimepkg.Resolve,
-		buildPortable:   portable.Build,
-		smokePortable:   portable.Smoke,
-		archivePortable: portable.Archive,
-		buildDebian:     installer.Debian{}.Build,
-		buildEmbedded:   embedded.Build,
-		smokeExecutable: portable.SmokeExecutable,
-		executablePath:  os.Executable,
-		getenv:          os.Getenv,
-		listRuntimes:    runtimepkg.List,
+		resolve:            toolchain.Resolve,
+		probe:              toolchain.Probe,
+		newWorkspace:       buildpkg.NewWorkspace,
+		collect:            collector.CollectProject,
+		compile:            compiler.Compile,
+		newManifest:        manifest.New,
+		writeManifest:      manifest.WriteFile,
+		writePackage:       flxpkg.Write,
+		signPackage:        signing.Sign,
+		resolveRuntime:     runtimepkg.Resolve,
+		buildPortable:      portable.Build,
+		smokePortable:      portable.Smoke,
+		archivePortable:    portable.Archive,
+		buildDebian:        installer.Debian{}.Build,
+		buildEmbedded:      embedded.Build,
+		smokeExecutable:    portable.SmokeExecutable,
+		executablePath:     os.Executable,
+		getenv:             os.Getenv,
+		listRuntimes:       runtimepkg.List,
+		ensureMesaFallback: mesafallback.EnsureCached,
+		acquire:            toolchainbuild.Acquire,
+		launcherFor:        launcherbin.For,
+
+		smokePortableContainer:   portable.SmokeContainer,
+		smokeExecutableContainer: portable.SmokeExecutableContainer,
 	}
 }
 
@@ -205,6 +238,9 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			_, _ = fmt.Fprintf(stderr, "error: invalid --output path\ncaused by: %v\n", err)
 			return 1
 		}
+	}
+	if options.targetOverride != "" {
+		cfg.Build.Target = options.targetOverride
 	}
 	if cfg.Package.Format != "portable" {
 		_, _ = fmt.Fprintf(stderr, "error: package format %q is not implemented yet; use portable\n", cfg.Package.Format)
@@ -362,18 +398,26 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 			_, _ = fmt.Fprintf(stderr, "error: failed to build embedded executable\ncaused by: %v\n", err)
 			return 1
 		}
-		if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
+		embedStrategy := resolveSmokeStrategy(packageManifest.Target.OS, packageManifest.Target.Arch)
+		if embedStrategy == smokeUnsupported {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(
 				stderr,
-				"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
+				"error: cannot verify target %s/%s on this host; artifact was not published\n",
 				packageManifest.Target.OS,
 				packageManifest.Target.Arch,
 			)
 			return 1
 		}
-		if _, err := dependencies.smokeExecutable(
-			context.Background(), embeddedResult.Path, targetStage, embeddedResult.PackageSHA256, 10*time.Second,
+		if err := smokeVerify(stdout, embedStrategy, packageManifest.Target.OS, packageManifest.Target.Arch,
+			func(ctx context.Context) error {
+				_, err := dependencies.smokeExecutable(ctx, embeddedResult.Path, targetStage, embeddedResult.PackageSHA256, 10*time.Second)
+				return err
+			},
+			func(ctx context.Context, run portable.ContainerRunner, timeout time.Duration) error {
+				_, err := dependencies.smokeExecutableContainer(ctx, embeddedResult.Path, targetStage, embeddedResult.PackageSHA256, run, timeout)
+				return err
+			},
 		); err != nil {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(stderr, "error: embedded executable smoke test failed\ncaused by: %v\n", err)
@@ -398,43 +442,96 @@ func runBuild(args []string, stdout, stderr io.Writer, dependencies buildDepende
 		if packageManifest.Target.OS == "macos" && cfg.Targets.MacOS.Icon != "" {
 			macOSIcon = filepath.Join(cfg.Root, filepath.FromSlash(cfg.Targets.MacOS.Icon))
 		}
+		windowsMesaFallbackDir := ""
+		if packageManifest.Target.OS == "windows" {
+			// Always attempted for Windows, per project decision: lets
+			// std.graph fall back to software rendering on a machine with
+			// no usable OpenGL driver (common inside VMs) instead of
+			// failing outright. Best-effort — see
+			// docs/adr/0027-automatic-toolchain-acquisition.md — a failure
+			// here only prints a warning, it never fails the build, since
+			// this is a documented, optional compatibility enhancement,
+			// not a functional requirement.
+			cacheRoot, cacheErr := builderCacheRoot()
+			if cacheErr != nil {
+				_, _ = fmt.Fprintf(stdout, "WARNING: Mesa3D software-rendering fallback was not bundled: %v\n", cacheErr)
+			} else {
+				// Only the first build on a given machine actually pays for
+				// the download/extraction (EnsureCached is a no-op once the
+				// cache is populated), but that first run can take a while
+				// with no other output — the same silent-hang risk the
+				// spinner already solves for automatic toolchain
+				// acquisition in the init wizard.
+				sp := newSpinner(stdout, newStyle(stdout))
+				sp.start("Fetching Windows Mesa3D software-rendering fallback")
+				dir, mesaErr := dependencies.ensureMesaFallback(context.Background(), filepath.Join(cacheRoot, "mesa-dist-win"))
+				sp.finish(mesaErr == nil)
+				if mesaErr != nil {
+					_, _ = fmt.Fprintf(stdout, "WARNING: Mesa3D software-rendering fallback was not bundled: %v\n", mesaErr)
+				} else {
+					windowsMesaFallbackDir = dir
+				}
+			}
+		}
+		launcherPath, err := stageLauncher(workspace.OutputDir, packageManifest.Target.OS, packageManifest.Target.Arch, dependencies.launcherFor)
+		if err != nil {
+			_ = workspace.Cleanup()
+			_, _ = fmt.Fprintf(stderr, "error: failed to stage the application launcher\ncaused by: %v\n", err)
+			return 1
+		}
 		portableResult, err = dependencies.buildPortable(context.Background(), portable.Request{
-			OutputRoot:    targetStage,
-			ProjectName:   cfg.Project.Name,
-			ProjectID:     cfg.Project.ID,
-			Version:       cfg.Project.Version,
-			TargetOS:      packageManifest.Target.OS,
-			TargetArch:    packageManifest.Target.Arch,
-			Terminal:      packageManifest.Target.Terminal,
-			PackagePath:   packageResult.Path,
-			PackageSHA256: packageResult.SHA256,
-			Runtime:       selectedRuntime,
-			LauncherPath:  currentExecutable(dependencies.executablePath),
-			SourceExposed: packageManifest.Build.SourceExposed,
-			SignaturePath: signatureResult.Path,
-			SignatureHash: signatureResult.SHA256,
-			SigningKeyID:  signatureResult.KeyID,
-			WindowsIcon:   windowsIcon,
-			LinuxIcon:     linuxIcon,
-			MacOSIcon:     macOSIcon,
-			BundleID:      cfg.Targets.MacOS.BundleID,
+			OutputRoot:             targetStage,
+			ProjectName:            cfg.Project.Name,
+			ProjectID:              cfg.Project.ID,
+			Version:                cfg.Project.Version,
+			TargetOS:               packageManifest.Target.OS,
+			TargetArch:             packageManifest.Target.Arch,
+			Terminal:               packageManifest.Target.Terminal,
+			PackagePath:            packageResult.Path,
+			PackageSHA256:          packageResult.SHA256,
+			Runtime:                selectedRuntime,
+			LauncherPath:           launcherPath,
+			SourceExposed:          packageManifest.Build.SourceExposed,
+			SignaturePath:          signatureResult.Path,
+			SignatureHash:          signatureResult.SHA256,
+			SigningKeyID:           signatureResult.KeyID,
+			WindowsIcon:            windowsIcon,
+			LinuxIcon:              linuxIcon,
+			MacOSIcon:              macOSIcon,
+			BundleID:               cfg.Targets.MacOS.BundleID,
+			WindowsMesaFallbackDir: windowsMesaFallbackDir,
 		})
 		if err != nil {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(stderr, "error: failed to assemble portable application\ncaused by: %v\n", err)
 			return 1
 		}
-		if !hostCanExecuteTarget(packageManifest.Target.OS, packageManifest.Target.Arch) {
+		for _, warning := range portableResult.Warnings {
+			if _, err := fmt.Fprintf(stdout, "WARNING: %s\n", warning); err != nil {
+				_ = workspace.Cleanup()
+				writeString(stderr, "error: failed to write build warning\n")
+				return 1
+			}
+		}
+		portableStrategy := resolveSmokeStrategy(packageManifest.Target.OS, packageManifest.Target.Arch)
+		if portableStrategy == smokeUnsupported {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(
 				stderr,
-				"error: cannot smoke-test target %s/%s on this host; artifact was not published\n",
+				"error: cannot verify target %s/%s on this host; artifact was not published\n",
 				packageManifest.Target.OS,
 				packageManifest.Target.Arch,
 			)
 			return 1
 		}
-		if err := dependencies.smokePortable(context.Background(), portableResult, 10*time.Second); err != nil {
+		if err := smokeVerify(stdout, portableStrategy, packageManifest.Target.OS, packageManifest.Target.Arch,
+			func(ctx context.Context) error {
+				return dependencies.smokePortable(ctx, portableResult, 10*time.Second)
+			},
+			func(ctx context.Context, run portable.ContainerRunner, timeout time.Duration) error {
+				return dependencies.smokePortableContainer(ctx, portableResult, run, timeout)
+			},
+		); err != nil {
 			_ = workspace.Cleanup()
 			_, _ = fmt.Fprintf(stderr, "error: portable application smoke test failed\ncaused by: %v\n", err)
 			return 1
@@ -619,6 +716,44 @@ func packageSources(compiledDir string, collection collector.Result, compilation
 	return sources
 }
 
+// stageLauncher writes the embedded cmd/fluxa-launcher binary for the
+// build's *target* into the workspace, for internal/portable to copy in as
+// the application's own executable.
+//
+// Fluxa Builder used to hand internal/portable its own running executable
+// here, which silently assumed the target always matched the host. It does
+// not: a Windows application assembled on Linux received an ELF as its
+// .exe, and the PE subsystem patch immediately after rejected it with
+// "unrecognized PE machine: 0x457f" — 0x457f being `\x7fE`, the ELF magic
+// read as a PE machine field. Nothing about the toolchain or runtime could
+// fix that; the launcher itself has to be built for the target, which is
+// what internal/launcherbin ships. See
+// docs/adr/0029-cross-target-application-launcher.md.
+func stageLauncher(workspaceDir, targetOS, targetArch string, launcherFor func(string, string) ([]byte, error)) (string, error) {
+	// Partially-filled buildDependencies literals are this package's own
+	// established test idiom; falling back to the real implementation on a
+	// nil hook is how currentExecutable already handles the same case.
+	if launcherFor == nil {
+		launcherFor = launcherbin.For
+	}
+	binary, err := launcherFor(targetOS, targetArch)
+	if err != nil {
+		return "", err
+	}
+	name := "fluxa-launcher"
+	if targetOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(workspaceDir, name)
+	// 0o600 is enough: internal/portable copies this into the application
+	// directory with the executable mode that target actually needs, and
+	// nothing ever runs it from here.
+	if err := os.WriteFile(path, binary, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func currentExecutable(resolve func() (string, error)) string {
 	if resolve == nil {
 		return ""
@@ -743,6 +878,16 @@ func buildRegistryRoot(explicit string) (string, error) {
 		return filepath.Abs(explicit)
 	}
 	return runtimepkg.DefaultRoot(os.Getenv("FLUXA_BUILDER_HOME"))
+}
+
+// builderCacheRoot is the shared ~/.fluxa-builder directory persistent
+// caches (the runtime registry, toolchain-src, mesa-dist-win) live under.
+func builderCacheRoot() (string, error) {
+	registryRoot, err := buildRegistryRoot("")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(registryRoot), nil
 }
 
 func runRuntime(args []string, stdout, stderr io.Writer) int {
@@ -912,6 +1057,114 @@ func hostCanExecuteTarget(osName, arch string) bool {
 	return osName == hostOS && arch == runtime.GOARCH
 }
 
+// smokeStrategy is resolveSmokeStrategy's answer for how a produced
+// target/arch can be verified before publishing. See docs/adr/0028.
+type smokeStrategy int
+
+const (
+	// smokeNative runs the self-test directly: the host can execute the
+	// target natively, exactly as this project always worked before
+	// docs/adr/0028.
+	smokeNative smokeStrategy = iota
+	// smokeWineContainer runs the self-test inside a pinned, network-
+	// isolated Wine container (internal/containersmoke.RunWindows) —
+	// available for a Windows target from any host with Docker.
+	smokeWineContainer
+	// smokeLinuxContainer runs the self-test inside a pinned, network-
+	// isolated plain Linux container (internal/containersmoke.RunLinux)
+	// — available for a Linux target from any host with Docker.
+	smokeLinuxContainer
+	// smokeUnsupported means neither native execution nor a container
+	// can verify this target here: macOS cross-building (Docker cannot
+	// run macOS at all — Apple does not license it for containers) or an
+	// unsupported architecture.
+	smokeUnsupported
+)
+
+// resolveSmokeStrategy decides how a produced target/arch combination can
+// be verified before publishing: natively when the host can already
+// execute it (unchanged from before docs/adr/0028), via a container when
+// Docker can bridge the gap (Windows via Wine, Linux directly, from any
+// host), or unsupported when neither applies.
+func resolveSmokeStrategy(targetOS, targetArch string) smokeStrategy {
+	if hostCanExecuteTarget(targetOS, targetArch) {
+		return smokeNative
+	}
+	switch targetOS {
+	case "windows":
+		return smokeWineContainer
+	case "linux":
+		return smokeLinuxContainer
+	default:
+		return smokeUnsupported
+	}
+}
+
+// containerRunnerFor maps a container smoke strategy to the
+// internal/containersmoke function that implements it. It returns nil for
+// smokeNative/smokeUnsupported, which never need one.
+func containerRunnerFor(strategy smokeStrategy) portable.ContainerRunner {
+	switch strategy {
+	case smokeWineContainer:
+		return containersmoke.RunWindows
+	case smokeLinuxContainer:
+		return containersmoke.RunLinux
+	default:
+		return nil
+	}
+}
+
+// containerSmokeTimeout is generous compared to the 10s native default:
+// container and (for Windows) Wine/Xvfb startup themselves eat into the
+// same budget the self-test process runs under, on top of a possible
+// first-run image build.
+const containerSmokeTimeout = 90 * time.Second
+
+// smokeVerify runs strategy's smoke test — natively via native, or inside
+// a network-isolated container via containerRunnerFor(strategy) — never
+// called with smokeUnsupported (callers check that first, since only they
+// know the right "cannot verify at all" message to print). The container
+// path is wrapped with a spinner: a first-run image build can take a
+// while with no other output otherwise, the same rationale as the Mesa
+// fallback spinner. See docs/adr/0028.
+func smokeVerify(
+	stdout io.Writer,
+	strategy smokeStrategy,
+	targetOS, targetArch string,
+	native func(context.Context) error,
+	container func(context.Context, portable.ContainerRunner, time.Duration) error,
+) error {
+	if strategy == smokeNative {
+		return native(context.Background())
+	}
+	sp := newSpinner(stdout, newStyle(stdout))
+	sp.start(fmt.Sprintf("Verifying the %s build inside a container", targetDirectoryName(targetOS, targetArch)))
+	err := container(context.Background(), containerRunnerFor(strategy), containerSmokeTimeout)
+	sp.finish(err == nil)
+	if err == nil {
+		return nil
+	}
+	// A *containersmoke.Error means verification never actually ran at
+	// all — Docker unavailable, an image build/priming failure, a
+	// third-party Wine version regression — as opposed to a
+	// *portable.Error, which means it did run and genuinely failed
+	// (which still fails the build; that guarantee is not weakened).
+	// This is a deliberate, documented trade-off, not an oversight — see
+	// docs/adr/0028: the project owner chose availability over always
+	// requiring verification specifically for this failure class,
+	// mirroring the existing Mesa3D fallback's own "warn and continue"
+	// behavior for the exact same kind of infrastructure failure.
+	var containerErr *containersmoke.Error
+	if errors.As(err, &containerErr) {
+		_, _ = fmt.Fprintf(stdout,
+			"WARNING: could not verify the %s build inside a container (%v); publishing without having run it — see docs/adr/0028\n",
+			targetDirectoryName(targetOS, targetArch), containerErr,
+		)
+		return nil
+	}
+	return err
+}
+
 func targetDirectoryName(osName, arch string) string {
 	if arch == "amd64" {
 		arch = "x64"
@@ -950,6 +1203,12 @@ func parseBuildOptions(args []string) (buildOptions, error) {
 			}
 			index++
 			options.outputOverride = args[index]
+		case "--target":
+			if index+1 >= len(args) {
+				return buildOptions{}, fmt.Errorf("--target requires host or <os>-<arch>")
+			}
+			index++
+			options.targetOverride = args[index]
 		case "--sign-key":
 			if index+1 >= len(args) {
 				return buildOptions{}, fmt.Errorf("--sign-key requires a private key path")

@@ -13,6 +13,11 @@ const (
 	ErrorIO ErrorKind = "io"
 	// ErrorLimit means a Windows artifact exceeds a safety limit.
 	ErrorLimit ErrorKind = "limit"
+	// ErrorUnsupported means an operation was refused for a known,
+	// expected reason that does not indicate corruption — callers may
+	// treat this as a signal to gracefully skip the operation rather than
+	// fail an entire build.
+	ErrorUnsupported ErrorKind = "unsupported"
 )
 
 // Error preserves operation and path context.

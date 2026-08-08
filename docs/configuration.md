@@ -6,8 +6,10 @@ tables. The current Fluxa loader ignores Builder tables and additional project
 metadata it does not use.
 
 `fluxa-builder init` can help write most of the Builder-specific fields
-described below interactively — see the "Guided setup" section of
-[README](../README.md). It never overwrites a field that is already present;
+described below interactively — see "Quick start" in the
+[README](../README.md), or the full walkthrough in the
+[User Manual](user-manual.md). It never overwrites a field that is already
+present;
 every field it does offer to write is previewed and requires confirmation
 first, and every other byte of the file (including Fluxa's own tables and any
 comments) is left untouched.
@@ -188,6 +190,28 @@ inside the project root once resolved; anything else is rejected before any
 work begins. `fluxa-builder init` uses this to preview an output directory and
 optionally offers to persist the choice into `fluxa.toml` afterward.
 
+## Build target override
+
+`build.target` (default `"host"`) selects which platform a build targets;
+an explicit value is `<os>-<arch>`, e.g. `"windows-x64"` or `"linux-x64"`.
+`build --target <os>-<arch>` overrides it for a single run without editing
+`fluxa.toml`, exactly like `--output` above; `fluxa-builder init`'s target
+menu uses this to make a non-host choice actually take effect, since it
+also reloads the project from disk before building.
+
+Building for a target other than the host machine still runs the produced
+application for real before publishing (this project's core safety
+guarantee — see [`docs/architecture.md`](architecture.md#build-verification)):
+when the host can't execute that target natively, verification runs
+instead inside a network-isolated, resource-bounded Docker container. A
+Linux host building `windows-x64` (or a Windows host building
+`linux-x64`) needs Docker for this. Exact per-platform-pair status,
+including a currently-unresolved Windows/Wine reliability limitation on
+some hosts, is documented in
+[ADR 0028](adr/0028-container-verified-cross-platform-builds.md). macOS
+targets stay host-only in both directions — there is no container path
+for macOS at all.
+
 ## Runtime registry
 
 The default registry is `~/.fluxa-builder/runtimes`. It can be inspected and
@@ -263,21 +287,39 @@ overwritten.
 For the official `windows-x64` target, the executable uses `.exe` and the
 portable directory also contains deterministic `windows-version.json`. When
 `targets.windows.icon` is configured, it must be a structurally valid ICO and
-is copied as `<application>.ico`. Both files are included in the deterministic
-ZIP:
+is copied as `<application>.ico`. Everything below is included in the
+deterministic ZIP:
 
 ```text
 <application>/
 ├── <application>.exe
+├── <application>.exe.local   # DLL redirection marker for the Mesa fallback
 ├── .fluxa-runtime.exe
 ├── <application>.flxpkg
 ├── <application>.flxpkg.sig  # when signing is enabled
 ├── <application>.ico         # when configured
+├── dxil.dll                  # Mesa3D software-rendering fallback
+├── libgallium_wgl.dll        # Mesa3D software-rendering fallback
+├── opengl32.dll              # Mesa3D software-rendering fallback
+├── opengl32sw.dll            # Mesa3D software-rendering fallback
 ├── windows-version.json
 └── build-info.json
 ```
 
+The four DLLs and the `.local` marker are the Mesa3D software-rendering
+fallback, bundled on every Windows build so `std.graph` still works on a
+machine with no usable OpenGL driver. `<application>.exe.local` is what
+makes them take effect: it enables Windows' per-application DLL
+redirection, so the loader prefers these copies over the system
+`opengl32.dll`. Without it the DLLs would ship and be ignored. See
+[`distribution.md`](distribution.md#windows-mesa3d-software-rendering-fallback).
+
 The Windows metadata records product name, project ID, semantic version,
 architecture, terminal mode, filenames, and verified runtime/package/icon
-hashes. PE resource editing, Authenticode code signing, and installers remain
-separate future formats; the Builder never rewrites the registered runtime PE.
+hashes.
+
+The Builder does rewrite the *launcher* PE it ships — patching its
+subsystem for `build.terminal` and embedding the configured icon into its
+resources ([ADR 0026](adr/0026-file-manager-icon-association.md)) — but
+never the registered runtime PE, which is copied unmodified. Authenticode
+code signing and Windows installers remain separate future formats.

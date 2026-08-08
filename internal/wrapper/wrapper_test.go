@@ -47,7 +47,7 @@ func TestEmbeddedBinariesMatchSource(t *testing.T) {
 			outputPath := filepath.Join(t.TempDir(), "fluxa-runtime-wrapper-"+tt.goos+"-"+tt.goarch)
 			execution, err := executor.Run(context.Background(), executor.Request{
 				Path:    "go",
-				Args:    []string{"build", "-trimpath", "-o", outputPath, "./cmd/fluxa-runtime-wrapper"},
+				Args:    []string{"build", "-trimpath", "-buildvcs=false", "-o", outputPath, "./cmd/fluxa-runtime-wrapper"},
 				Dir:     repoRoot,
 				Env:     append(os.Environ(), "GOOS="+tt.goos, "GOARCH="+tt.goarch, "CGO_ENABLED=0"),
 				Timeout: 2 * time.Minute,

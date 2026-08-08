@@ -1,5 +1,7 @@
 # Manual do Usuário — Fluxa Builder
 
+*[Also available in English: user-manual.md](user-manual.md)*
+
 Este manual mostra o caminho atual para transformar um projeto Fluxa já
 testado em uma aplicação portátil que pode ser aberta diretamente pelo usuário
 final.
@@ -24,29 +26,56 @@ Ele detecta o sistema automaticamente e, na ordem, pergunta:
    ausente ou faltar `name`, `id`, `version` ou `entry`, o wizard oferece
    preencher cada campo — sempre mostrando a linha exata antes de gravar e
    pedindo confirmação;
-2. as configurações opcionais mais comuns descritas na seção 4 —
+2. qual plataforma gerar. Escolher a plataforma da própria máquina continua
+   funcionando como sempre. Escolher `windows-x64` ou `linux-x64` em outra
+   máquina agora também funciona de verdade: o teste de fumaça que precisa
+   passar antes de publicar roda dentro de um container Docker isolado de
+   rede, em vez de nativamente — ver "Construindo para outra plataforma" na
+   seção 6. Escolher `macos` numa máquina que não é Mac, ou "as três
+   plataformas" numa única execução, ainda não é suportado; o wizard explica
+   o motivo e pergunta de novo, e uma resposta que não corresponde a nenhuma
+   opção do menu é recusada em vez de virar silenciosamente uma build da
+   própria máquina. O que você escolher aqui vale mais do que qualquer
+   `build.target` já fixado no `fluxa.toml`;
+3. as configurações opcionais mais comuns descritas na seção 4 —
    `build.assets`, `build.exclude`, `build.persistent`/`build.export`,
-   `package.include_source`, e o ícone/`bundle_id` da sua plataforma atual —
-   pulando silenciosamente qualquer campo que já esteja definido no
-   `fluxa.toml`;
-3. qual plataforma gerar. Esta etapa é apenas informativa: como o teste de
-   fumaça precisa executar o aplicativo gerado, só é possível construir e
-   publicar o alvo desta própria máquina numa mesma execução; para os
-   demais, rode o wizard novamente em uma máquina (ou runner de CI) daquele
-   sistema;
+   `package.include_source`, e o ícone/`bundle_id` **da plataforma escolhida
+   acima**, não da máquina em que você está — pulando silenciosamente
+   qualquer campo que já esteja definido no `fluxa.toml`. É por isso que a
+   pergunta do alvo vem primeiro: cada build lê apenas o ícone do próprio
+   alvo, então uma build para Windows pede o `.ico` que ela realmente vai
+   embutir;
 4. onde salvar a saída, com a opção de gravar essa escolha em
    `build.output`;
 5. se deve tentar baixar e compilar o toolchain da Fluxa automaticamente.
-   Essa opção ainda **não está implementada** — a resposta "sim" apenas
-   explica isso e cai no guia manual (equivalente às seções 5 e 6 abaixo),
-   incluindo um `runtime.json` inicial já preenchido com o que for possível
-   calcular (hash de `fluxa.libs`, hash do binário do runtime se você já
-   tiver um pronto, etc.).
+   No Linux e no Windows, respondendo "sim" o wizard clona o `fluxa-lang` e
+   compila de verdade dentro de um container Docker fixo (inclusive
+   cross-compilando para Windows a partir do Linux, sem precisar de uma
+   máquina Windows) — nunca mexe nos pacotes do sistema. Gerando para
+   Windows a partir do Linux, esse mesmo download é compilado duas vezes:
+   o runtime Windows que você distribui e mais um compilador que roda na
+   *sua* máquina, já que um `.exe` cross-compilado não compila nada aqui.
+   Recusar, ou uma condição que a automação ainda não cobre, cai no guia manual
+   (equivalente às seções 5 e 6 abaixo), incluindo um `runtime.json` inicial
+   já preenchido com o que for possível calcular. No macOS essa automação
+   ainda está em espera e sempre cai direto no guia manual. Ver
+   `docs/adr/0027-automatic-toolchain-acquisition.md` (em inglês).
 
-Quando um toolchain `fluxa` e ao menos um runtime já estão registrados, o
-wizard pula direto para gerar a aplicação de verdade (equivalente à
-seção 6), usando o mesmo pipeline documentado abaixo — nenhuma etapa é
-reimplementada nem simplificada.
+O wizard pula direto para gerar a aplicação de verdade (equivalente à
+seção 6) somente quando existe um toolchain `fluxa` **e** um runtime
+registrado que realmente resolve para esta build — a mesma seleção que o
+`build` faz, não apenas um runtime da mesma plataforma. Um runtime
+registrado só serve com exatamente o toolchain, o `fluxa.libs` e o modo de
+terminal contra os quais foi construído; então um runtime `windows-x64`
+que sobrou de outro projeto não conta como pronto: o wizard explica isso e
+oferece construir o par compatível, em vez de iniciar uma build que
+morreria na seleção do runtime.
+
+Como os slots do registro são identificados pela versão que o toolchain
+reporta, e o `fluxa-lang` não reporta nenhuma, todo runtime construído hoje
+cai no mesmo slot para um dado alvo e modo de terminal. Quando a aquisição
+produz um runtime cujo slot já está ocupado pelo incompatível, o wizard
+pergunta antes de substituir; recusar deixa o registro intacto.
 
 ## 1. Pré-requisitos
 
@@ -58,8 +87,13 @@ Na máquina do sistema que será empacotado, instale ou prepare:
 - um runtime Fluxa protegido, compilado para o mesmo sistema, arquitetura e
   modo de terminal do aplicativo.
 
-O Builder executa um teste nativo antes de publicar. Por isso, gere o pacote
-Windows no Windows, o pacote macOS no macOS e o pacote Linux no Linux.
+O Builder sempre executa a aplicação gerada de verdade antes de publicar.
+Quando a máquina consegue rodar o alvo nativamente, esse teste roda direto;
+quando não consegue — uma build `windows-x64` no Linux, ou o contrário —
+ele roda dentro de um container Docker isolado de rede. Por isso esses dois
+alvos podem ser gerados a partir de qualquer um dos dois sistemas. O macOS
+é a exceção: precisa ser gerado no próprio macOS, porque nenhum container
+executa macOS. Ver "Construindo para outra plataforma" na seção 6.
 
 ## 2. Compilar o Builder
 
@@ -239,13 +273,39 @@ relativo, sem `..`, permanecendo dentro do projeto):
 fluxa-builder build . --include-source --output build-output
 ```
 
+### Construindo para outra plataforma
+
+`--target <os>-<arch>` gera para uma plataforma diferente da máquina atual
+numa única execução, sem editar o `fluxa.toml`:
+
+```sh
+# a partir de uma máquina Linux
+fluxa-builder build . --include-source --target windows-x64
+```
+
+O teste de fumaça continua executando a aplicação gerada de verdade antes
+de publicar — essa garantia de segurança não é enfraquecida — mas quando a
+máquina não consegue rodar aquele alvo nativamente, ele roda dentro de um
+container Docker isolado de rede em vez disso. Gerar `linux-x64` dessa
+forma funciona por completo. Gerar `windows-x64` dessa forma tem uma
+limitação de confiabilidade conhecida e ainda não resolvida em algumas
+máquinas: quando a verificação em container não consegue nem rodar (Docker
+ausente, ou essa limitação), o build ainda assim publica, com uma linha
+`WARNING:`, em vez de ser bloqueado. Ver
+`docs/adr/0028-container-verified-cross-platform-builds.md` (em inglês)
+para o status exato e o raciocínio por trás dessa escolha. Alvos `macos`
+sempre precisam ser gerados em hardware Mac real; não existe caminho via
+container para o macOS.
+
 O Builder:
 
 1. coleta somente os arquivos declarados;
 2. cria e verifica o pacote FLXPKG;
 3. seleciona um runtime protegido compatível;
-4. monta o launcher e o runtime privado;
-5. executa o teste nativo sem abrir a interface;
+4. monta o launcher (compilado para a plataforma alvo, não para a máquina
+   que roda o build) e o runtime privado;
+5. executa o teste sem abrir a interface — nativamente, ou dentro de um
+   container quando a máquina não consegue executar o alvo;
 6. cria o arquivo de distribuição e seu SHA-256;
 7. publica o resultado somente se todas as etapas passarem.
 
@@ -264,26 +324,77 @@ dist/windows-x64/
 │   ├── meu-jogo.exe
 │   ├── .fluxa-runtime.exe
 │   ├── meu-jogo.flxpkg
+│   ├── meu-jogo.ico                (somente se targets.windows.icon estiver definido)
+│   ├── dxil.dll
+│   ├── libgallium_wgl.dll
+│   ├── opengl32.dll
+│   ├── opengl32sw.dll
+│   ├── meu-jogo.exe.local
 │   ├── windows-version.json
 │   └── build-info.json
 ├── meu-jogo.zip
 └── meu-jogo.zip.sha256
 ```
 
-Entregue o ZIP. O usuário extrai a pasta e abre somente `meu-jogo.exe`.
+Entregue o ZIP. O usuário extrai a pasta e abre somente `meu-jogo.exe`. Se um
+ícone foi configurado, ele já fica embutido nos recursos do próprio `.exe`
+(veja "Associar o ícone ao executável", abaixo) — o `.ico` solto continua
+sendo entregue de qualquer forma.
+
+Os quatro arquivos `.dll` e o `meu-jogo.exe.local` são o fallback de
+renderização por software do Mesa3D — deixam `std.graph` funcionando mesmo
+numa máquina sem driver de GPU utilizável (comum em VMs). São baixados uma
+vez, verificados por checksum e cacheados em `~/.fluxa-builder/mesa-dist-win`;
+se essa etapa falhar, o build imprime um `WARNING:` e continua sem os
+arquivos — é uma melhoria de compatibilidade opcional, não um requisito
+funcional. Ver `docs/adr/0027-automatic-toolchain-acquisition.md` (em
+inglês).
 
 ### Linux
 
 ```text
 dist/linux-x64/
 ├── meu-jogo/
+│   ├── meu-jogo
+│   ├── .fluxa-runtime
+│   ├── .fluxa-runtime.interpreter
+│   ├── meu-jogo.flxpkg
+│   ├── meu-jogo.png                (somente se targets.linux.icon estiver definido)
+│   ├── install-desktop-shortcut.sh
+│   ├── build-info.json
+│   └── linux-runtime.json
 ├── meu-jogo.tar.gz
 ├── meu-jogo.tar.gz.sha256
 ├── com.exemplo.meu-jogo_1.0.0_amd64.deb
 └── com.exemplo.meu-jogo_1.0.0_amd64.deb.sha256
 ```
 
-É possível entregar o `.tar.gz` portátil ou o instalador `.deb`.
+É possível entregar o `.tar.gz` portátil ou o instalador `.deb`. Os dois já
+registram um ícone e uma entrada de menu automaticamente — o `.deb` na
+instalação, o `.tar.gz` portátil na primeira vez que o jogo é aberto.
+
+### Associar o ícone ao executável
+
+Um ícone configurado (`targets.windows.icon` / `targets.linux.icon`) sempre é
+entregue como um arquivo solto ao lado do executável. Ver
+`docs/adr/0026-file-manager-icon-association.md` (em inglês) para o desenho
+completo; resumindo:
+
+- **Windows**: o ícone já é embutido diretamente nos recursos do `.exe`
+  durante o `build` — nenhuma etapa extra é necessária. Isso é feito de
+  forma best-effort: se o launcher não tiver espaço de cabeçalho para mais
+  uma seção, ou já carregar recursos embutidos, o `fluxa-builder build`
+  imprime uma linha `WARNING:`, o build continua e é publicado normalmente,
+  e o `.ico` solto continua sendo entregue como antes.
+- **Linux**: o próprio launcher registra sua entrada `.desktop` em
+  `~/.local/share/applications` automaticamente na primeira execução —
+  nenhuma etapa extra para quem só quer jogar — e atualiza essa entrada a
+  cada execução seguinte, então mover a pasta depois não deixa um atalho
+  desatualizado. O script `install-desktop-shortcut.sh` também continua
+  sendo entregue na raiz da pasta portátil, útil para scripts de
+  provisionamento ou instalação em massa que nunca chegam a abrir a
+  interface gráfica; ele registra a mesma entrada e também é seguro de
+  executar de novo.
 
 ### macOS
 

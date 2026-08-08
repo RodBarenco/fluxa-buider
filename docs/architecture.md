@@ -22,16 +22,38 @@ Builds use an isolated workspace and publish final artifacts atomically.
 
 `fluxa-builder init` (`internal/app/init.go`) is a thin interactive layer in
 front of this pipeline, not a second implementation of it: once a toolchain
-and a registered runtime are found, it constructs the equivalent `build`
-arguments and calls the same `runBuild` entry point used by the non-interactive
-CLI. Its only independent logic is guidance — detecting the host, walking the
-user through required and optional `fluxa.toml` fields, and printing manual
-toolchain/runtime setup steps when nothing is ready yet. All of its
-`fluxa.toml` edits go through `internal/project`'s additive editor
+and a usable registered runtime are found, it constructs the equivalent
+`build` arguments and calls the same `runBuild` entry point used by the
+non-interactive CLI. Its own independent logic is guidance — detecting the
+host, walking the user through required and optional `fluxa.toml` fields,
+and, when nothing is ready yet, either automatically acquiring a
+toolchain/runtime (Linux and Windows, via `internal/toolchainbuild` — see
+ADR 0027) or printing manual setup steps (macOS, and any Linux/Windows
+condition automatic acquisition does not support).
+
+Two ordering and precedence rules make the wizard's answers binding rather
+than advisory, and both exist because breaking them produced builds that
+contradicted what the wizard had printed:
+
+- The target is chosen **before** any per-platform question, because every
+  build reads exactly one platform's icon/bundle metadata — the one it is
+  producing. Asking about the host's platform on a cross-target run
+  collected settings that build could not use and never asked for the ones
+  it needed.
+- The menu answer is always passed through as an explicit `--target`,
+  including the `host` sentinel for "this machine". Omitting the flag does
+  not mean the host; it defers to whatever `build.target` `fluxa.toml`
+  carries, which silently overrode the choice for any pinned project.
+
+Whether setup is complete is likewise decided by the *same* runtime
+resolution `runBuild` performs (`plannedRuntimeRequirement`), not by an
+OS/arch approximation of it — see "Runtime compatibility" below.
+
+All of its `fluxa.toml` edits go through
+`internal/project`'s additive editor
 (`EnsureStringField`/`EnsureBoolField`/`EnsureStringArrayField`), which never
 modifies or removes an existing key and rewrites the file atomically. See
-ADR 0024 for the full design and its deliberately excluded scope (automatic
-toolchain download-and-build).
+ADR 0024 for the wizard's overall design.
 
 ## Transactional workspace
 
@@ -119,11 +141,60 @@ program representation, packaged-runtime mode, terminal mode, and raw
 `fluxa.libs` hash. Resolution rehashes every candidate and fails closed if no
 single exact match exists.
 
+The registry's *slot* key is coarser than its *compatibility* key, and the
+gap is load-bearing today: the slot is only version/target/terminal, while
+compatibility also demands the exact toolchain and `fluxa.libs` hashes.
+Because Fluxa reports no version at all (ADR 0004), every runtime built
+today lands in the same `unreported` slot for a given target. Two runtimes
+that are genuinely different — built for projects with different
+`fluxa.libs`, or against different toolchains — therefore collide, and
+`Add` refuses to write into an occupied slot. `runtime.Remove` is the
+escape hatch, used only by `init` after resolution has already proven the
+occupant unusable for this build, and only with explicit confirmation.
+This disappears once Fluxa reports a real version.
+
+## Build verification
+
+Every build runs the produced application for real
+(`--fluxa-package-self-test`) before publishing anything — a safety
+guarantee, not an optional check. `internal/app.resolveSmokeStrategy`
+picks how, per target: `smokeNative` when the host can already execute
+the target directly (the only path that existed before ADR 0028), or a
+container path (`smokeWineContainer`/`smokeLinuxContainer`,
+`internal/containersmoke`) when it can't — running the application inside
+a pinned, network-isolated, resource-bounded Docker container instead.
+macOS targets have no container path (Apple does not license macOS for
+containers) and stay host-only.
+
+The self-test always runs against a disposable, isolated copy of the
+staged build output, never the directory that actually gets archived and
+published (`internal/portable.SmokeExecutable`'s own isolation step):
+anything the application happens to write on first run — a generated
+key, a config file, a save slot — can never leak into a published
+artifact. `internal/containersmoke`'s Linux container path is fully
+verified end to end, including that its network isolation genuinely
+blocks outbound connections. Its Windows/Wine container path has a
+known, currently-unresolved reliability limitation on some hosts; see
+[ADR 0028](adr/0028-container-verified-cross-platform-builds.md) for the
+full investigation and the deliberate trade-off that follows from it: a
+container-infrastructure failure (as opposed to the self-test itself
+genuinely failing) degrades a build to a `WARNING:` and still publishes,
+rather than blocking it.
+
 ## Application launcher
 
-Portable output contains a renamed Fluxa Builder launcher, a private
+Portable output contains an application launcher, a private
 `.fluxa-runtime[.exe]`, a same-basename `.flxpkg`, and `build-info.json`.
 Assembly and hash verification happen inside the transactional workspace.
+
+The launcher is `cmd/fluxa-launcher`, cross-compiled per target and
+embedded by `internal/launcherbin` (`make launcher`, guarded by the same
+byte-for-byte drift test as the runtime relay below). It used to be the
+Fluxa Builder executable itself, renamed — which silently assumed the
+build target matched the host, and so produced an ELF named `<app>.exe`
+for a Windows build on a Linux machine. `internal/app` still exposes the
+renamed-binary entry point for applications distributed before this
+change. See ADR 0029.
 
 On Linux and macOS, `.fluxa-runtime` is not the registered runtime binary
 directly: it is a small embedded relay (`cmd/fluxa-runtime-wrapper`) that
@@ -149,9 +220,13 @@ The launcher, rather than the language runtime, owns the distribution contract:
 
 The launcher also implements the non-interactive
 `--fluxa-package-self-test` protocol. The registered Fluxa binary remains a
-script runtime and does not need to parse FLXPKG, but distribution builds select
-the `FLUXA_PACKAGED_RUNTIME` variant. That variant refuses the public CLI and
-accepts only identity probing plus the launcher's private execution protocol.
+script runtime and does not need to parse FLXPKG. What provides the
+private-entry restriction depends on the target, as above: on Windows,
+distribution builds select the `FLUXA_PACKAGED_RUNTIME` variant, which
+refuses the public CLI and accepts only identity probing plus the
+launcher's private execution protocol; on Linux and macOS the plain
+interpreter has no such variant, and the relay in front of it enforces the
+same restriction instead.
 
 ## Runtime data
 

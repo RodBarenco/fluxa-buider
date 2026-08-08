@@ -1,7 +1,29 @@
 # ADR 0024: Interactive `init` wizard, scoped to guidance and safe TOML edits
 
-- Status: Accepted
+- Status: Accepted; three decisions below have since been superseded
 - Date: 2026-08-04
+
+> **Superseded parts.** This ADR is kept as the record of the wizard's
+> original scope. Three of its decisions no longer describe the shipped
+> behavior:
+>
+> - "Rejected alternative 1" (no automatic toolchain acquisition) was
+>   reversed by [ADR 0027](0027-automatic-toolchain-acquisition.md), which
+>   builds `fluxa-lang` for real inside a pinned Docker container. The
+>   manual guide is now the fallback, not the only path.
+> - "Rejected alternative 2" (the target step is informational only,
+>   because the smoke test restricts publishing to the host) was reversed
+>   by [ADR 0028](0028-container-verified-cross-platform-builds.md): a
+>   non-host `windows-x64`/`linux-x64` choice now genuinely takes effect,
+>   verified inside a container. The target is consequently chosen
+>   *before* the optional-settings pass, and the per-platform
+>   `targets.<os>.icon`/`bundle_id` questions follow the chosen target
+>   rather than the host.
+> - The manual guide's build step is per-target — `make build` for
+>   Linux/macOS (with the relay from
+>   [ADR 0025](0025-linux-adapted-runtime-wrapper.md) supplying the
+>   private entry) and `make build-windows-packaged` for Windows — not the
+>   single `make build-packaged` named below.
 
 ## Context
 
